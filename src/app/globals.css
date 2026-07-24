@@ -1,23 +1,24 @@
 @import "tailwindcss";
 
 @theme {
-  --color-bg: #0d0d10;
-  --color-panel: #131318;
-  --color-raised: #1a1a21;
-  --color-inset: #09090b;
-  --color-line: #232330;
-  --color-line-strong: #32323f;
-  --color-ink: #ededf2;
-  --color-ink-dim: #9b9ba8;
-  --color-ink-faint: #62626e;
-  --color-amber: #ffb224;
-  --color-amber-deep: #f7931e;
-  --color-amber-ink: #1a1205;
-  --color-ok: #3dd68c;
-  --color-danger: #e5484d;
+  --color-black: #0a0a0b;
+  --color-void: #050506;
+  --color-panel: #101013;
+  --color-line: #1e1e23;
+  --color-line-strong: #2e2e36;
+  --color-ink: #f2f1ec;
+  --color-ink-dim: #8f8f97;
+  --color-ink-faint: #55555c;
+  --color-lime: #d4f53c;
+  --color-lime-deep: #b8dc22;
+  --color-danger: #ff5c5c;
+}
 
-  --font-display: var(--font-bricolage), sans-serif;
-  --font-body: var(--font-instrument), sans-serif;
+/* Font tokens reference next/font runtime variables (scoped to <body>), so they
+   must be inline tokens — a plain @theme value would never resolve. */
+@theme inline {
+  --font-serif: var(--font-fraunces), serif;
+  --font-body: var(--font-grotesk), sans-serif;
   --font-mono: var(--font-plex-mono), monospace;
 }
 
@@ -26,95 +27,124 @@ html {
 }
 
 body {
-  background: var(--color-bg);
+  background: var(--color-black);
   color: var(--color-ink);
-  font-family: var(--font-body);
+  font-family: var(--font-grotesk), sans-serif;
   -webkit-font-smoothing: antialiased;
-  position: relative;
 }
 
-/* Film grain over everything, very quiet */
+/* Quiet film grain */
 body::after {
   content: "";
   position: fixed;
   inset: 0;
   pointer-events: none;
   z-index: 100;
-  opacity: 0.35;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3CfeColorMatrix values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0.04 0'/%3E%3C/filter%3E%3Crect width='160' height='160' filter='url(%23n)'/%3E%3C/svg%3E");
+  opacity: 0.5;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2'/%3E%3CfeColorMatrix values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0.03 0'/%3E%3C/filter%3E%3Crect width='180' height='180' filter='url(%23n)'/%3E%3C/svg%3E");
 }
 
 ::selection {
-  background: color-mix(in srgb, var(--color-amber) 35%, transparent);
+  background: color-mix(in srgb, var(--color-lime) 30%, transparent);
 }
 
-/* Thin editor scrollbars */
 * {
   scrollbar-width: thin;
   scrollbar-color: var(--color-line-strong) transparent;
 }
 
-/* Ruler-tick motif for headers/timeline strips */
-.ticks {
-  background-image: repeating-linear-gradient(
-    to right,
-    var(--color-line) 0,
-    var(--color-line) 1px,
-    transparent 1px,
-    transparent 12px
-  );
+/* Editorial underline input */
+.uline {
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid var(--color-line-strong);
+  border-radius: 0;
+  padding: 6px 0;
+  width: 100%;
+  font-size: 14px;
+  color: var(--color-ink);
+  outline: none;
+  transition: border-color 0.2s;
+}
+.uline::placeholder {
+  color: var(--color-ink-faint);
+}
+.uline:focus {
+  border-bottom-color: var(--color-lime);
 }
 
-/* REC dot pulse */
-@keyframes rec-pulse {
-  0%, 100% { opacity: 1; box-shadow: 0 0 0 0 color-mix(in srgb, var(--color-amber) 55%, transparent); }
-  50% { opacity: 0.75; box-shadow: 0 0 0 5px transparent; }
-}
-.rec-dot {
-  animation: rec-pulse 2.2s ease-in-out infinite;
+/* Micro label */
+.micro {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--color-ink-faint);
 }
 
-/* Staggered page-load reveal */
+/* LED dot */
+.led {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--color-line-strong);
+}
+.led.on {
+  background: var(--color-lime);
+  box-shadow: 0 0 6px color-mix(in srgb, var(--color-lime) 70%, transparent);
+}
+
 @keyframes rise-in {
-  from { opacity: 0; transform: translateY(10px); }
+  from { opacity: 0; transform: translateY(14px); }
   to { opacity: 1; transform: translateY(0); }
 }
 .rise {
-  animation: rise-in 0.5s cubic-bezier(0.22, 1, 0.36, 1) both;
+  animation: rise-in 0.6s cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
-/* Native color input, tamed */
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.25; }
+}
+.blink {
+  animation: blink 1.1s steps(2, start) infinite;
+}
+
+/* Range slider */
+input[type="range"] {
+  appearance: none;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--color-line-strong);
+  cursor: pointer;
+}
+input[type="range"]::-webkit-slider-thumb {
+  appearance: none;
+  width: 12px;
+  height: 12px;
+  border-radius: 999px;
+  background: var(--color-ink);
+  transition: background 0.15s;
+}
+input[type="range"]:hover::-webkit-slider-thumb {
+  background: var(--color-lime);
+}
+
+/* Native color input */
 input[type="color"] {
   appearance: none;
   -webkit-appearance: none;
   border: none;
   padding: 0;
   background: none;
-  width: 34px;
-  height: 34px;
-  border-radius: 8px;
+  width: 30px;
+  height: 30px;
+  border-radius: 999px;
   overflow: hidden;
   cursor: pointer;
 }
 input[type="color"]::-webkit-color-swatch-wrapper { padding: 0; }
 input[type="color"]::-webkit-color-swatch {
   border: 1px solid var(--color-line-strong);
-  border-radius: 8px;
-}
-
-/* Range slider */
-input[type="range"] {
-  appearance: none;
-  height: 3px;
-  border-radius: 2px;
-  background: var(--color-line-strong);
-  cursor: pointer;
-}
-input[type="range"]::-webkit-slider-thumb {
-  appearance: none;
-  width: 14px;
-  height: 14px;
-  border-radius: 50%;
-  background: var(--color-amber);
-  border: 2px solid var(--color-bg);
+  border-radius: 999px;
 }

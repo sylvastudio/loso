@@ -1,9 +1,11 @@
 {
-  "name": "reelsmith",
+  "name": "sylvastudio",
   "version": "0.1.0",
   "private": true,
   "pnpm": {
-    "onlyBuiltDependencies": ["better-sqlite3"]
+    "onlyBuiltDependencies": [
+      "better-sqlite3"
+    ]
   },
   "scripts": {
     "dev": "next dev",
@@ -11,11 +13,13 @@
     "start": "next start"
   },
   "dependencies": {
+    "@remotion/player": "4.0.498",
     "better-sqlite3": "^12.2.0",
     "lucide-react": "^0.525.0",
     "next": "^15.4.4",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
+    "remotion": "4.0.498",
     "zod": "^3.25.76"
   },
   "devDependencies": {

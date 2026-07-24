@@ -35,6 +35,42 @@ export function setApiKey(provider: ProviderId, value: string) {
   else kvSet(`key.${provider}`, value.trim());
 }
 
+// ---------- pronunciation dictionary ----------
+
+export interface PronunciationEntry {
+  match: string;
+  replacement: string;
+}
+
+export function getPronunciations(): PronunciationEntry[] {
+  const raw = kvGet("pronunciations");
+  if (!raw) return [];
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return [];
+  }
+}
+
+export function setPronunciations(entries: PronunciationEntry[]) {
+  kvSet("pronunciations", JSON.stringify(entries));
+}
+
+// ---------- provider usage counters ----------
+
+export function bumpUsage(provider: string, metric: string, amount: number) {
+  const key = `usage.${provider}.${metric}`;
+  const current = Number(kvGet(key) ?? 0);
+  kvSet(key, String(current + amount));
+}
+
+export function getUsage(): Record<string, number> {
+  const rows = getDb()
+    .prepare("SELECT key, value FROM kv WHERE key LIKE 'usage.%'")
+    .all() as Array<{ key: string; value: string }>;
+  return Object.fromEntries(rows.map((r) => [r.key.slice(6), Number(r.value)]));
+}
+
 // ---------- brand ----------
 
 export function getBrand(): Brand {
@@ -57,6 +93,7 @@ export interface ProjectSettings {
   pace: "single" | "chill" | "normal" | "fast";
   captionStyle: "clean" | "dynamic";
   voiceId: string | null;
+  voice?: { stability: number; similarity: number; style: number; speed: number };
 }
 
 export interface Project {

@@ -1,9 +1,10 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ImagePlus, Music4, Plus, Trash2, UploadCloud } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { ImagePlus, Music4, Plus, Trash2 } from "lucide-react";
 import { FONT_CHOICES, defaultBrand, type Brand, type Presenter } from "@/lib/brand";
 import { Button, Field, Input, Section, Select, Switch, Textarea } from "@/components/ui";
+import { FontLoader } from "@/components/font-loader";
 
 async function uploadFile(file: File, kind: string): Promise<{ hash: string; url: string }> {
   const form = new FormData();
@@ -19,53 +20,32 @@ function assetUrl(hash: string | null): string | null {
   return hash ? `/api/assets/${hash}` : null;
 }
 
-/** Load selected Google fonts so the live preview is true to the render. */
-function FontLoader({ families }: { families: string[] }) {
-  const href = useMemo(() => {
-    const parts = [...new Set(families)]
-      .map((f) => `family=${f.replace(/ /g, "+")}:wght@400;700;800`)
-      .join("&");
-    return `https://fonts.googleapis.com/css2?${parts}&display=swap`;
-  }, [families]);
-  // eslint-disable-next-line @next/next/no-page-custom-font
-  return <link rel="stylesheet" href={href} />;
-}
-
 // ---------- Live 9:16 preview ----------
 
 function BrandPreview({ brand }: { brand: Brand }) {
   const { colors, fonts } = brand;
   const logo = assetUrl(brand.logoHash);
   return (
-    <div className="sticky top-6">
-      <p className="mb-2 font-mono text-[10px] uppercase tracking-[0.16em] text-ink-faint">
-        Live preview · captions + outro card
-      </p>
+    <div className="sticky top-8">
+      <p className="micro mb-2.5">Live preview</p>
       <div
-        className="relative mx-auto aspect-[9/16] w-full max-w-[250px] overflow-hidden rounded-2xl border border-line-strong shadow-[0_20px_60px_-20px_rgba(0,0,0,0.8)]"
+        className="relative mx-auto aspect-[9/16] w-full max-w-[240px] overflow-hidden border border-line-strong shadow-[0_30px_80px_-30px_rgba(0,0,0,0.9)]"
         style={{ background: colors.backgroundColor }}
       >
-        {/* safe-zone guides */}
-        <div className="pointer-events-none absolute inset-x-[8%] inset-y-[6%] rounded-lg border border-dashed border-white/10" />
-
-        {/* caption sample at ~55% height */}
+        {/* caption sample */}
         <div
-          className="absolute inset-x-0 top-[52%] px-3 text-center"
+          className="absolute inset-x-0 top-[48%] -translate-y-1/2 px-3 text-center"
           style={{ fontFamily: `'${fonts.caption}', sans-serif` }}
         >
           <span
-            className="text-[15px] font-bold leading-snug"
-            style={{
-              color: colors.primaryColor,
-              textShadow: "0 2px 10px rgba(0,0,0,0.65)",
-            }}
+            className="text-[15px] font-extrabold leading-snug"
+            style={{ color: colors.primaryColor, textShadow: "0 2px 10px rgba(0,0,0,0.65)" }}
           >
-            your captions{" "}
-            <span style={{ color: colors.captionHighlightColor }}>look</span> like this
+            your captions <span style={{ color: colors.captionHighlightColor }}>look</span> like
+            this
           </span>
         </div>
 
-        {/* corner badge */}
         {brand.ctaBadge && (
           <div
             className="absolute right-2.5 top-2.5 rounded-full px-2 py-0.5 text-[8px] font-bold"
@@ -79,33 +59,26 @@ function BrandPreview({ brand }: { brand: Brand }) {
           </div>
         )}
 
-        {/* outro card block */}
+        {/* outro block */}
         <div className="absolute inset-x-0 bottom-0 flex flex-col items-center gap-1.5 px-4 pb-5 text-center">
           {logo ? (
             // eslint-disable-next-line @next/next/no-img-element
-            <img
-              src={logo}
-              alt="logo"
-              className="mb-1 h-10 w-10 rounded-xl object-contain"
-            />
+            <img src={logo} alt="logo" className="mb-1 h-10 w-10 object-contain" />
           ) : (
             <div
-              className="mb-1 flex h-10 w-10 items-center justify-center rounded-xl text-sm font-black"
+              className="mb-1 flex h-10 w-10 items-center justify-center rounded-full text-sm font-black"
               style={{
                 background: colors.accentColor,
                 color: colors.backgroundColor,
                 fontFamily: `'${fonts.display}', sans-serif`,
               }}
             >
-              {(brand.brandName || "R")[0]?.toUpperCase()}
+              {(brand.brandName || "S")[0]?.toUpperCase()}
             </div>
           )}
           <p
-            className="text-[16px] font-extrabold leading-tight"
-            style={{
-              color: colors.primaryColor,
-              fontFamily: `'${fonts.display}', sans-serif`,
-            }}
+            className="text-[15px] font-extrabold leading-tight"
+            style={{ color: colors.primaryColor, fontFamily: `'${fonts.display}', sans-serif` }}
           >
             {brand.brandName || "Your Brand"}
           </p>
@@ -123,10 +96,7 @@ function BrandPreview({ brand }: { brand: Brand }) {
             </span>
           )}
           {brand.disclaimer && (
-            <p
-              className="mt-1 text-[6px] leading-tight opacity-40"
-              style={{ color: colors.primaryColor }}
-            >
+            <p className="mt-1 text-[6px] leading-tight opacity-40" style={{ color: colors.primaryColor }}>
               {brand.disclaimer}
             </p>
           )}
@@ -135,8 +105,6 @@ function BrandPreview({ brand }: { brand: Brand }) {
     </div>
   );
 }
-
-// ---------- Color field ----------
 
 function ColorField({
   label,
@@ -148,20 +116,19 @@ function ColorField({
   onChange: (v: string) => void;
 }) {
   return (
-    <Field label={label}>
-      <div className="flex items-center gap-2">
+    <div>
+      <span className="micro mb-1.5 block">{label}</span>
+      <div className="flex items-center gap-2.5">
         <input type="color" value={value} onChange={(e) => onChange(e.target.value)} />
         <Input
           value={value}
           onChange={(e) => onChange(e.target.value)}
-          className="h-[34px] w-28 font-mono text-[12px] uppercase"
+          className="w-24 font-mono text-[12px] uppercase"
         />
       </div>
-    </Field>
+    </div>
   );
 }
-
-// ---------- Main panel ----------
 
 export function BrandPanel() {
   const [brand, setBrand] = useState<Brand | null>(null);
@@ -213,15 +180,14 @@ export function BrandPanel() {
     <>
       <FontLoader families={[brand.fonts.caption, brand.fonts.display]} />
 
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-[1fr_270px]">
-        <div className="flex flex-col gap-4">
-          {/* Identity */}
-          <div className="rise" style={{ animationDelay: "0ms" }}>
+      <div className="grid grid-cols-1 gap-10 pt-4 lg:grid-cols-[1fr_260px]">
+        <div>
           <Section
+            n="01"
             title="Identity"
-            description="Name, logo, and the calls-to-action that appear on every video."
+            description="Name, logo, and the calls-to-action every video carries."
           >
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <div className="grid grid-cols-1 gap-6 sm:grid-cols-2">
               <Field label="Brand name">
                 <Input
                   value={brand.brandName}
@@ -252,7 +218,7 @@ export function BrandPanel() {
               </Field>
             </div>
 
-            <div className="mt-4 flex items-center gap-4">
+            <div className="mt-7 flex items-center gap-4">
               <input
                 ref={logoInput}
                 type="file"
@@ -270,7 +236,7 @@ export function BrandPanel() {
               <button
                 type="button"
                 onClick={() => logoInput.current?.click()}
-                className="flex h-16 w-16 items-center justify-center overflow-hidden rounded-xl border border-dashed border-line-strong bg-inset transition-colors hover:border-amber/60"
+                className="flex h-14 w-14 items-center justify-center overflow-hidden border border-dashed border-line-strong transition-colors hover:border-lime"
               >
                 {brand.logoHash ? (
                   // eslint-disable-next-line @next/next/no-img-element
@@ -280,15 +246,14 @@ export function BrandPanel() {
                     className="h-full w-full object-contain p-1.5"
                   />
                 ) : (
-                  <ImagePlus size={18} className="text-ink-faint" />
+                  <ImagePlus size={16} className="text-ink-faint" />
                 )}
               </button>
               <div>
-                <p className="text-sm font-medium">Logo</p>
-                <p className="text-[12px] text-ink-faint">PNG with transparency works best.</p>
+                <p className="text-[13px]">Logo — PNG with transparency works best.</p>
                 {brand.logoHash && (
                   <button
-                    className="mt-1 text-[12px] text-danger/80 hover:text-danger"
+                    className="mt-0.5 text-[12px] text-danger/70 hover:text-danger"
                     onClick={() => patch({ logoHash: null })}
                   >
                     Remove
@@ -297,15 +262,13 @@ export function BrandPanel() {
               </div>
             </div>
           </Section>
-          </div>
 
-          {/* Look */}
-          <div className="rise" style={{ animationDelay: "70ms" }}>
           <Section
+            n="02"
             title="Look & tone"
-            description="Colors and fonts flow into captions, overlays, and the outro. Tone words steer the AI's imagery."
+            description="Colors and fonts flow into captions and overlays. Tone words steer the AI's imagery."
           >
-            <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+            <div className="grid grid-cols-2 gap-x-8 gap-y-6">
               <ColorField
                 label="Background"
                 value={brand.colors.backgroundColor}
@@ -322,15 +285,13 @@ export function BrandPanel() {
                 onChange={(v) => patch({ colors: { ...brand.colors, accentColor: v } })}
               />
               <ColorField
-                label="Caption highlight"
+                label="Highlight"
                 value={brand.colors.captionHighlightColor}
-                onChange={(v) =>
-                  patch({ colors: { ...brand.colors, captionHighlightColor: v } })
-                }
+                onChange={(v) => patch({ colors: { ...brand.colors, captionHighlightColor: v } })}
               />
             </div>
 
-            <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <div className="mt-7 grid grid-cols-1 gap-6 sm:grid-cols-2">
               <Field label="Caption font">
                 <Select
                   value={brand.fonts.caption}
@@ -357,11 +318,8 @@ export function BrandPanel() {
               </Field>
             </div>
 
-            <div className="mt-4">
-              <Field
-                label="Visual tone words"
-                hint="steers AI image prompts"
-              >
+            <div className="mt-7">
+              <Field label="Visual tone words" hint="steers AI image prompts">
                 <Input
                   value={brand.toneWords}
                   placeholder="bright, modern, editorial"
@@ -370,16 +328,14 @@ export function BrandPanel() {
               </Field>
             </div>
           </Section>
-          </div>
 
-          {/* Presenters */}
-          <div className="rise" style={{ animationDelay: "140ms" }}>
           <Section
-            title="Presenter avatars"
-            description="Optional corner presenter with an audio-reactive visualizer. Voice mapping unlocks once your ElevenLabs key is set."
+            n="03"
+            title="Presenters"
+            description="Optional corner presenter with an audio-reactive visualizer. Voice mapping unlocks with an ElevenLabs key."
             actions={
               <Button size="sm" variant="outline" onClick={() => presenterInput.current?.click()}>
-                <Plus size={14} /> Add
+                <Plus size={13} /> Add
               </Button>
             }
           >
@@ -404,16 +360,13 @@ export function BrandPanel() {
               }}
             />
             {brand.presenters.length === 0 ? (
-              <p className="py-2 text-[13px] text-ink-faint">
+              <p className="text-[13px] text-ink-faint">
                 No presenters yet — videos render without one, or add a face for your brand.
               </p>
             ) : (
-              <div className="flex flex-wrap gap-3">
+              <div className="flex flex-wrap gap-6">
                 {brand.presenters.map((p) => (
-                  <div
-                    key={p.id}
-                    className="flex items-center gap-3 rounded-xl border border-line bg-inset p-2.5 pr-3"
-                  >
+                  <div key={p.id} className="flex items-center gap-3">
                     {/* eslint-disable-next-line @next/next/no-img-element */}
                     <img
                       src={assetUrl(p.imageHash) ?? ""}
@@ -422,7 +375,7 @@ export function BrandPanel() {
                     />
                     <Input
                       value={p.name}
-                      className="h-8 w-32 text-[13px]"
+                      className="w-28 text-[13px]"
                       onChange={(e) =>
                         patch({
                           presenters: brand.presenters.map((x) =>
@@ -437,23 +390,21 @@ export function BrandPanel() {
                         patch({ presenters: brand.presenters.filter((x) => x.id !== p.id) })
                       }
                     >
-                      <Trash2 size={14} />
+                      <Trash2 size={13} />
                     </button>
                   </div>
                 ))}
               </div>
             )}
           </Section>
-          </div>
 
-          {/* Extras */}
-          <div className="rise" style={{ animationDelay: "210ms" }}>
           <Section
-            title="Intro, outro & music"
-            description="Bookend animations and an optional looped music bed under the voiceover."
+            n="04"
+            title="Bookends & music"
+            description="Intro / outro animations and an optional looped music bed under the voice."
           >
-            <div className="flex flex-col gap-4">
-              <div className="flex items-center gap-8">
+            <div className="flex flex-col gap-6">
+              <div className="flex items-center gap-10">
                 <Switch
                   checked={brand.intro.enabled}
                   onChange={(v) => patch({ intro: { enabled: v } })}
@@ -466,7 +417,7 @@ export function BrandPanel() {
                 />
               </div>
 
-              <div className="flex items-center gap-3">
+              <div className="flex flex-wrap items-center gap-4">
                 <input
                   ref={musicInput}
                   type="file"
@@ -482,20 +433,14 @@ export function BrandPanel() {
                   }}
                 />
                 <Button size="sm" variant="outline" onClick={() => musicInput.current?.click()}>
-                  <Music4 size={14} />
-                  {brand.music.assetHash ? "Replace music bed" : "Upload music bed"}
+                  <Music4 size={13} />
+                  {brand.music.assetHash ? "Replace music" : "Upload music bed"}
                 </Button>
                 {brand.music.assetHash && (
                   <>
-                    <audio
-                      controls
-                      src={assetUrl(brand.music.assetHash)!}
-                      className="h-8 max-w-[220px]"
-                    />
+                    <audio controls src={assetUrl(brand.music.assetHash)!} className="h-8 max-w-[200px]" />
                     <div className="flex items-center gap-2">
-                      <span className="font-mono text-[10px] uppercase tracking-wider text-ink-faint">
-                        vol
-                      </span>
+                      <span className="micro">vol</span>
                       <input
                         type="range"
                         min={0}
@@ -503,9 +448,7 @@ export function BrandPanel() {
                         step={0.01}
                         value={brand.music.volume}
                         onChange={(e) =>
-                          patch({
-                            music: { ...brand.music, volume: Number(e.target.value) },
-                          })
+                          patch({ music: { ...brand.music, volume: Number(e.target.value) } })
                         }
                       />
                     </div>
@@ -513,13 +456,13 @@ export function BrandPanel() {
                       className="text-ink-faint transition-colors hover:text-danger"
                       onClick={() => patch({ music: { ...brand.music, assetHash: null } })}
                     >
-                      <Trash2 size={14} />
+                      <Trash2 size={13} />
                     </button>
                   </>
                 )}
               </div>
 
-              <Field label="Disclaimer" hint="optional — shown small on the outro">
+              <Field label="Disclaimer" hint="optional — small print on the outro">
                 <Textarea
                   rows={2}
                   value={brand.disclaimer}
@@ -529,7 +472,6 @@ export function BrandPanel() {
               </Field>
             </div>
           </Section>
-          </div>
         </div>
 
         <BrandPreview brand={brand} />
@@ -537,16 +479,16 @@ export function BrandPanel() {
 
       {/* Save bar */}
       <div
-        className={`pointer-events-none fixed inset-x-0 bottom-0 z-40 flex justify-center pb-5 transition-all duration-300 ${
+        className={`pointer-events-none fixed inset-x-0 bottom-0 z-40 flex justify-center pb-6 transition-all duration-300 ${
           dirty || savedFlash ? "translate-y-0 opacity-100" : "translate-y-4 opacity-0"
         }`}
       >
-        <div className="pointer-events-auto flex items-center gap-4 rounded-full border border-line-strong bg-raised/90 py-2 pl-5 pr-2 shadow-[0_12px_40px_-8px_rgba(0,0,0,0.7)] backdrop-blur-md">
+        <div className="pointer-events-auto flex items-center gap-4 border border-line-strong bg-black/90 py-2.5 pl-5 pr-2.5 backdrop-blur-md">
           {savedFlash && !dirty ? (
-            <span className="pr-3 text-sm text-ok">Brand saved ✓</span>
+            <span className="pr-3 text-[13px] text-lime">Brand saved</span>
           ) : (
             <>
-              <span className="text-sm text-ink-dim">Unsaved brand changes</span>
+              <span className="text-[13px] text-ink-dim">Unsaved changes</span>
               <Button
                 size="sm"
                 variant="ghost"
@@ -555,7 +497,6 @@ export function BrandPanel() {
                 Discard
               </Button>
               <Button size="sm" onClick={save} disabled={saving}>
-                <UploadCloud size={14} />
                 {saving ? "Saving…" : "Save brand"}
               </Button>
             </>

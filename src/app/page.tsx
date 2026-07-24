@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { Clapperboard, Plus, Trash2 } from "lucide-react";
+import { Plus, Trash2 } from "lucide-react";
 import { Button, Field, Input, Select, Textarea } from "@/components/ui";
 
 interface ProjectListItem {
@@ -11,6 +11,7 @@ interface ProjectListItem {
   title: string;
   script: string;
   settings: { pace: string; captionStyle: string };
+  artifacts: { transcript?: { durationSec: number } };
   updatedAt: number;
 }
 
@@ -45,21 +46,21 @@ function NewProjectModal({ onClose }: { onClose: () => void }) {
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-6 backdrop-blur-sm"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-6 backdrop-blur-[2px]"
       onMouseDown={(e) => e.target === e.currentTarget && onClose()}
     >
-      <div className="rise w-full max-w-xl rounded-2xl border border-line-strong bg-panel shadow-[0_30px_80px_-20px_rgba(0,0,0,0.9)]">
-        <header className="border-b border-line px-6 py-4">
-          <h2 className="font-display text-lg font-bold tracking-tight">New project</h2>
-          <p className="mt-0.5 text-[13px] text-ink-dim">
-            Paste your script — the studio handles voice, captions, and visuals.
+      <div className="rise w-full max-w-xl border border-line-strong bg-black shadow-[0_40px_120px_-30px_rgba(0,0,0,1)]">
+        <header className="border-b border-line px-7 pb-5 pt-6">
+          <h2 className="font-serif text-[26px] italic tracking-tight">New short</h2>
+          <p className="mt-1 text-[13px] text-ink-dim">
+            Paste the narration — Sylva voices it, captions it, and cuts visuals to the beat.
           </p>
         </header>
-        <div className="flex flex-col gap-4 p-6">
+        <div className="flex flex-col gap-6 px-7 py-6">
           <Field label="Title" hint="optional">
             <Input
               value={title}
-              placeholder="Untitled project"
+              placeholder="Untitled short"
               onChange={(e) => setTitle(e.target.value)}
               autoFocus
             />
@@ -68,13 +69,11 @@ function NewProjectModal({ onClose }: { onClose: () => void }) {
             <Textarea
               rows={7}
               value={script}
-              placeholder={
-                "Type or paste the narration for your short…\n\nEvery word will be voiced, captioned, and matched to visuals."
-              }
+              placeholder="Every word will be voiced, captioned word-for-word, and matched to visuals…"
               onChange={(e) => setScript(e.target.value)}
             />
           </Field>
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-2 gap-8">
             <Field label="Pace">
               <Select value={pace} onChange={(e) => setPace(e.target.value)}>
                 <option value="chill">Chill · ~9s per shot</option>
@@ -91,12 +90,12 @@ function NewProjectModal({ onClose }: { onClose: () => void }) {
             </Field>
           </div>
         </div>
-        <footer className="flex justify-end gap-2 border-t border-line px-6 py-4">
+        <footer className="flex justify-end gap-3 border-t border-line px-7 py-4">
           <Button variant="ghost" onClick={onClose}>
             Cancel
           </Button>
           <Button onClick={create} disabled={!script.trim() || creating}>
-            {creating ? "Creating…" : "Create project"}
+            {creating ? "Creating…" : "Create"}
           </Button>
         </footer>
       </div>
@@ -107,7 +106,7 @@ function NewProjectModal({ onClose }: { onClose: () => void }) {
 export default function ProjectsPage() {
   const [projects, setProjects] = useState<ProjectListItem[] | null>(null);
   const [showNew, setShowNew] = useState(false);
-  const [keysMissing, setKeysMissing] = useState(false);
+  const [missingCount, setMissingCount] = useState(0);
 
   function refresh() {
     fetch("/api/projects")
@@ -120,9 +119,8 @@ export default function ProjectsPage() {
     fetch("/api/keys")
       .then((r) => r.json())
       .then((d) =>
-        setKeysMissing(
-          d.keys.filter((k: { id: string; set: boolean }) => k.id !== "serpapi" && !k.set)
-            .length > 0
+        setMissingCount(
+          d.keys.filter((k: { id: string; set: boolean }) => k.id !== "serpapi" && !k.set).length
         )
       );
   }, []);
@@ -133,92 +131,93 @@ export default function ProjectsPage() {
   }
 
   return (
-    <div className="mx-auto max-w-5xl px-8 pb-20 pt-10">
-      <header className="mb-8 flex items-end justify-between">
-        <div>
-          <p className="mb-1 font-mono text-[11px] uppercase tracking-[0.2em] text-amber">
-            Script in · branded short out
-          </p>
-          <h1 className="font-display text-3xl font-bold tracking-tight">Projects</h1>
+    <div className="mx-auto max-w-5xl px-8 pb-24">
+      {/* Editorial hero */}
+      <header className="border-b border-line pb-10 pt-14">
+        <p className="micro rise mb-4">Faceless short-video studio</p>
+        <h1
+          className="rise font-serif text-[clamp(40px,6vw,68px)] font-light leading-[1.02] tracking-[-0.02em]"
+          style={{ animationDelay: "60ms" }}
+        >
+          Script in.
+          <br />
+          <em className="text-lime">Branded short</em> out.
+        </h1>
+        <div
+          className="rise mt-8 flex items-center gap-5"
+          style={{ animationDelay: "140ms" }}
+        >
+          <Button onClick={() => setShowNew(true)}>
+            <Plus size={15} /> New short
+          </Button>
+          {missingCount > 0 && (
+            <Link
+              href="/settings"
+              className="text-[13px] text-ink-faint transition-colors hover:text-lime"
+            >
+              {missingCount} pipeline {missingCount === 1 ? "key" : "keys"} missing — finish setup →
+            </Link>
+          )}
         </div>
-        <Button onClick={() => setShowNew(true)}>
-          <Plus size={16} /> New project
-        </Button>
       </header>
 
-      {keysMissing && (
-        <Link
-          href="/settings"
-          className="mb-6 flex items-center justify-between rounded-xl border border-amber/25 bg-amber/5 px-5 py-3.5 transition-colors hover:bg-amber/10"
-        >
-          <p className="text-sm text-ink-dim">
-            <span className="font-medium text-amber">Finish setup —</span> some pipeline
-            keys are missing. The studio runs in a degraded mode until they&apos;re added.
-          </p>
-          <span className="text-sm text-amber">Open Settings →</span>
-        </Link>
-      )}
-
-      {projects === null ? null : projects.length === 0 ? (
-        <button
-          onClick={() => setShowNew(true)}
-          className="rise group mx-auto mt-10 flex w-full max-w-md flex-col items-center gap-5 rounded-2xl border border-dashed border-line-strong px-8 py-14 transition-colors hover:border-amber/50"
-        >
-          <div className="ticks relative flex aspect-[9/16] w-28 items-center justify-center rounded-xl border border-line-strong bg-panel">
-            <Clapperboard
-              size={22}
-              className="text-ink-faint transition-colors group-hover:text-amber"
-            />
-            <span className="absolute inset-x-3 bottom-3 h-1 rounded bg-line" />
-            <span className="absolute inset-x-3 bottom-5 h-1 w-2/3 rounded bg-line" />
-          </div>
-          <div className="text-center">
-            <p className="font-display text-lg font-semibold">Make your first short</p>
-            <p className="mt-1 max-w-xs text-sm text-ink-dim">
-              Paste a script and Reelsmith voices it, captions it word-for-word, and cuts
-              visuals to the beat.
-            </p>
-          </div>
-        </button>
-      ) : (
-        <div className="grid grid-cols-1 gap-3">
+      {/* Poster grid */}
+      {projects !== null && projects.length > 0 && (
+        <div className="grid grid-cols-2 gap-x-6 gap-y-10 pt-10 sm:grid-cols-3 md:grid-cols-4">
           {projects.map((p, i) => (
             <Link
               key={p.id}
               href={`/project/${p.id}`}
-              className="rise group flex items-center gap-5 rounded-xl border border-line bg-panel p-4 transition-colors hover:border-amber/40"
-              style={{ animationDelay: `${i * 50}ms` }}
+              className="rise group"
+              style={{ animationDelay: `${i * 40}ms` }}
             >
-              <div className="ticks flex aspect-[9/16] w-12 shrink-0 items-center justify-center rounded-md border border-line bg-inset">
-                <Clapperboard size={13} className="text-ink-faint group-hover:text-amber" />
-              </div>
-              <div className="min-w-0 flex-1">
-                <h3 className="truncate font-display text-[15px] font-semibold tracking-tight">
+              <div className="relative flex aspect-[9/16] flex-col justify-between overflow-hidden border border-line bg-panel p-4 transition-colors duration-200 group-hover:border-lime/70">
+                <p className="micro">{p.settings.pace}</p>
+                <p className="font-serif text-[17px] italic leading-snug tracking-tight text-ink">
                   {p.title}
-                </h3>
-                <p className="mt-0.5 truncate text-[13px] text-ink-faint">
-                  {p.script.slice(0, 120) || "No script yet"}
                 </p>
-              </div>
-              <div className="flex shrink-0 items-center gap-4">
-                <span className="font-mono text-[11px] uppercase tracking-wider text-ink-faint">
-                  {p.settings.pace} · {p.settings.captionStyle}
-                </span>
-                <span className="font-mono text-[11px] text-ink-faint">
-                  {timeAgo(p.updatedAt)}
-                </span>
                 <button
-                  className="rounded-md p-2 text-ink-faint opacity-0 transition-all hover:bg-danger/10 hover:text-danger group-hover:opacity-100"
+                  className="absolute right-2.5 top-2.5 p-1 text-ink-faint opacity-0 transition-opacity hover:text-danger group-hover:opacity-100"
                   onClick={(e) => {
                     e.preventDefault();
                     remove(p.id);
                   }}
                 >
-                  <Trash2 size={14} />
+                  <Trash2 size={13} />
                 </button>
+              </div>
+              <div className="mt-2 flex items-baseline justify-between">
+                <span className="text-[11.5px] text-ink-faint">
+                  {p.artifacts?.transcript
+                    ? `${p.artifacts.transcript.durationSec.toFixed(0)}s voiced`
+                    : "draft"}
+                </span>
+                <span className="font-mono text-[10.5px] text-ink-faint">{timeAgo(p.updatedAt)}</span>
               </div>
             </Link>
           ))}
+        </div>
+      )}
+
+      {projects !== null && projects.length === 0 && (
+        <div className="rise pt-10" style={{ animationDelay: "220ms" }}>
+          <button
+            onClick={() => setShowNew(true)}
+            className="group flex w-56 flex-col justify-between border border-dashed border-line-strong p-4 text-left transition-colors hover:border-lime/70"
+            style={{ aspectRatio: "9/16" }}
+          >
+            <span className="micro">01</span>
+            <span>
+              <span className="font-serif text-[18px] italic leading-snug text-ink-dim transition-colors group-hover:text-ink">
+                Your first short
+                <br />
+                starts with a script.
+              </span>
+              <span className="mt-3 block text-[12px] text-ink-faint">
+                Click to begin →
+              </span>
+            </span>
+          </button>
         </div>
       )}
 

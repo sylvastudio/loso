@@ -1,16 +1,18 @@
 import type { Metadata } from "next";
-import { Bricolage_Grotesque, Instrument_Sans, IBM_Plex_Mono } from "next/font/google";
+import { Fraunces, Schibsted_Grotesk, IBM_Plex_Mono } from "next/font/google";
 import "./globals.css";
 import { AppShell } from "@/components/app-shell";
 
-const bricolage = Bricolage_Grotesque({
+const fraunces = Fraunces({
   subsets: ["latin"],
-  variable: "--font-bricolage",
+  style: ["normal", "italic"],
+  axes: ["opsz", "SOFT"],
+  variable: "--font-fraunces",
 });
 
-const instrument = Instrument_Sans({
+const grotesk = Schibsted_Grotesk({
   subsets: ["latin"],
-  variable: "--font-instrument",
+  variable: "--font-grotesk",
 });
 
 const plexMono = IBM_Plex_Mono({
@@ -20,16 +22,14 @@ const plexMono = IBM_Plex_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Reelsmith — Faceless Short-Video Studio",
-  description: "Script in, branded 9:16 short out.",
+  title: "Sylva — Short-Video Studio",
+  description: "Script in. Branded 9:16 short out.",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en">
-      <body
-        className={`${bricolage.variable} ${instrument.variable} ${plexMono.variable}`}
-      >
+      <body className={`${fraunces.variable} ${grotesk.variable} ${plexMono.variable}`}>
         <AppShell>{children}</AppShell>
       </body>
     </html>

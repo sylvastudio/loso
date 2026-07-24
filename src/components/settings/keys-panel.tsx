@@ -1,9 +1,9 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { ExternalLink, KeyRound } from "lucide-react";
+import { ArrowUpRight } from "lucide-react";
 import { PROVIDERS } from "@/lib/providers";
-import { Button, Input, StatusChip } from "@/components/ui";
+import { Button, Input, StatusWord } from "@/components/ui";
 
 interface KeyState {
   set: boolean;
@@ -39,86 +39,81 @@ export function KeysPanel() {
   }
 
   return (
-    <div className="flex flex-col gap-3">
-      <p className="mb-1 max-w-xl text-[13px] leading-relaxed text-ink-dim">
-        Keys are stored server-side only — they never reach the browser or a rendered
-        video. Each missing key disables its pipeline stage gracefully; everything else
-        keeps working.
+    <div>
+      <p className="max-w-lg pt-6 text-[13px] leading-relaxed text-ink-dim">
+        Bring your own keys. They live server-side in the local database — never in the browser,
+        never in a rendered video. Missing keys switch their stage off gracefully; the rest of the
+        studio keeps working.
       </p>
 
-      {PROVIDERS.map((p, i) => {
-        const st = status[p.id];
-        const ok = st?.set ?? false;
-        return (
-          <div
-            key={p.id}
-            className="rise rounded-xl border border-line bg-panel p-5"
-            style={{ animationDelay: `${i * 60}ms` }}
-          >
-            <div className="flex flex-wrap items-start justify-between gap-3">
-              <div className="flex items-start gap-3">
-                <div className="mt-0.5 flex h-9 w-9 items-center justify-center rounded-lg border border-line bg-inset">
-                  <KeyRound size={15} className={ok ? "text-amber" : "text-ink-faint"} />
+      <div className="mt-4">
+        {PROVIDERS.map((p, i) => {
+          const st = status[p.id];
+          const ok = st?.set ?? false;
+          return (
+            <div
+              key={p.id}
+              className="rise grid grid-cols-1 gap-4 border-b border-line py-7 md:grid-cols-[200px_1fr_auto]"
+              style={{ animationDelay: `${i * 50}ms` }}
+            >
+              <div>
+                <div className="flex items-baseline gap-2">
+                  <span className="micro text-lime">{String(i + 1).padStart(2, "0")}</span>
+                  <h3 className="font-serif text-[18px] tracking-tight">{p.label}</h3>
+                  {p.optional && <span className="micro">opt</span>}
                 </div>
-                <div>
-                  <div className="flex items-center gap-2.5">
-                    <h3 className="font-display text-[15px] font-semibold tracking-tight">
-                      {p.label}
-                    </h3>
-                    {p.optional && (
-                      <span className="font-mono text-[10px] uppercase tracking-wider text-ink-faint">
-                        optional
-                      </span>
-                    )}
-                  </div>
-                  <p className="mt-0.5 text-[13px] text-ink-dim">{p.role}</p>
-                </div>
+                <p className="mt-1 text-[12px] leading-relaxed text-ink-faint">{p.role}</p>
               </div>
-              <StatusChip ok={ok} labels={["Connected", "Not set"]} />
-            </div>
 
-            <p className="mt-3 text-[13px] leading-relaxed text-ink-faint">
-              {ok ? <>Unlocks: {p.unlocks}.</> : <>{p.degraded}</>}
-            </p>
+              <div className="max-w-md">
+                <div className="flex items-end gap-3">
+                  <Input
+                    type="password"
+                    autoComplete="off"
+                    placeholder={
+                      ok && st?.masked ? `Saved · ${st.masked} — paste to replace` : p.placeholder
+                    }
+                    value={drafts[p.id] ?? ""}
+                    onChange={(e) => setDrafts((s) => ({ ...s, [p.id]: e.target.value }))}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && (drafts[p.id] ?? "").trim()) save(p.id, drafts[p.id]);
+                    }}
+                    className="font-mono text-[13px]"
+                  />
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={!(drafts[p.id] ?? "").trim() || busy === p.id}
+                    onClick={() => save(p.id, drafts[p.id])}
+                  >
+                    {busy === p.id ? "…" : "Save"}
+                  </Button>
+                  {ok && (
+                    <Button size="sm" variant="danger" onClick={() => save(p.id, "")}>
+                      Remove
+                    </Button>
+                  )}
+                </div>
+                <p className="mt-2.5 text-[12px] leading-relaxed text-ink-faint">
+                  {ok ? <>Unlocks: {p.unlocks}.</> : p.degraded}
+                </p>
+              </div>
 
-            <div className="mt-3.5 flex items-center gap-2">
-              <Input
-                type="password"
-                autoComplete="off"
-                placeholder={ok && st?.masked ? `Saved · ${st.masked} — paste to replace` : p.placeholder}
-                value={drafts[p.id] ?? ""}
-                onChange={(e) => setDrafts((s) => ({ ...s, [p.id]: e.target.value }))}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" && (drafts[p.id] ?? "").trim()) {
-                    save(p.id, drafts[p.id]);
-                  }
-                }}
-                className="max-w-md font-mono text-[13px]"
-              />
-              <Button
-                size="sm"
-                disabled={!(drafts[p.id] ?? "").trim() || busy === p.id}
-                onClick={() => save(p.id, drafts[p.id])}
-              >
-                {busy === p.id ? "Saving…" : "Save"}
-              </Button>
-              {ok && (
-                <Button size="sm" variant="danger" onClick={() => save(p.id, "")}>
-                  Remove
-                </Button>
-              )}
-              <a
-                href={p.docsUrl}
-                target="_blank"
-                rel="noreferrer"
-                className="ml-auto inline-flex items-center gap-1 text-[12px] text-ink-faint transition-colors hover:text-amber"
-              >
-                Get key <ExternalLink size={11} />
-              </a>
+              <div className="flex flex-col items-end justify-between gap-3">
+                <StatusWord ok={ok} labels={["Live", "Off"]} />
+                <a
+                  href={p.docsUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-flex items-center gap-0.5 text-[11.5px] text-ink-faint transition-colors hover:text-lime"
+                >
+                  Get key <ArrowUpRight size={11} />
+                </a>
+              </div>
             </div>
-          </div>
-        );
-      })}
+          );
+        })}
+      </div>
     </div>
   );
 }
