@@ -31,7 +31,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       <header className="flex h-[58px] shrink-0 items-center justify-between border-b border-line px-6">
         <Link href="/" className="flex items-baseline gap-2">
           <span className="font-serif text-[24px] italic leading-none tracking-tight">
-            Sylva
+            Loso
           </span>
           <span className="micro translate-y-[-1px] text-ink-dim">studio</span>
         </Link>

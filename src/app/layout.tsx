@@ -22,7 +22,7 @@ const plexMono = IBM_Plex_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Sylva — Short-Video Studio",
+  title: "Loso — Short-Video Studio",
   description: "Script in. Branded 9:16 short out.",
 };
 

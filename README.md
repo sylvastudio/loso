@@ -1,9 +1,9 @@
-# Sylva — Faceless Short-Video Studio
+# Loso — Faceless Short-Video Studio
 
 A single-tenant web app that turns a **written script + your branding + your own API keys**
 into a polished, captioned, voiced **9:16 vertical short video (MP4)**.
 
-Paste a script; Sylva voices it (ElevenLabs `eleven_v3`), syncs captions word-for-word
+Paste a script; Loso voices it (ElevenLabs `eleven_v3`), syncs captions word-for-word
 (Groq Whisper word timestamps), builds an AI shot list (Anthropic), sources visuals (Pexels),
 and renders a branded video with **Remotion 4**.
 

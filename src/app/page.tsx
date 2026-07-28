@@ -53,7 +53,7 @@ function NewProjectModal({ onClose }: { onClose: () => void }) {
         <header className="border-b border-line px-7 pb-5 pt-6">
           <h2 className="font-serif text-[26px] italic tracking-tight">New short</h2>
           <p className="mt-1 text-[13px] text-ink-dim">
-            Paste the narration — Sylva voices it, captions it, and cuts visuals to the beat.
+            Paste the narration — Loso voices it, captions it, and cuts visuals to the beat.
           </p>
         </header>
         <div className="flex flex-col gap-6 px-7 py-6">
