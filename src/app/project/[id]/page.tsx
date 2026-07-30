@@ -7,6 +7,7 @@ import { ArrowLeft, CircleAlert, Pause, Play, Sparkles } from "lucide-react";
 import { Button, Field, Select, Textarea, cx } from "@/components/ui";
 import { FontLoader } from "@/components/font-loader";
 import { ShortComposition, SHORT_FPS } from "@/remotion/short";
+import { CompositorEditor } from "@/components/compositor/editor";
 import { groupWords, type Word } from "@/lib/captions";
 import type { Brand } from "@/lib/brand";
 
@@ -74,6 +75,33 @@ function SliderRow({
 
 export default function ProjectPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
+  const [route, setRoute] = useState<{ kind: string; project: RawProject } | null>(null);
+
+  useEffect(() => {
+    fetch(`/api/projects/${id}`)
+      .then((r) => r.json())
+      .then((d) =>
+        setRoute({ kind: d.project?.settings?.kind ?? "ai-short", project: d.project })
+      );
+  }, [id]);
+
+  if (!route) {
+    return <p className="py-24 text-center text-sm text-ink-faint">Loading…</p>;
+  }
+  if (route.kind === "compositor") {
+    return <CompositorEditor project={route.project} />;
+  }
+  return <AiShortEditor id={id} />;
+}
+
+interface RawProject {
+  id: string;
+  title: string;
+  settings: { kind?: string; compositor?: import("@/lib/compositor").CompositorDoc };
+  artifacts: { render?: { url: string; renderedAt: number } };
+}
+
+function AiShortEditor({ id }: { id: string }) {
   const [project, setProject] = useState<Project | null>(null);
   const [brand, setBrand] = useState<Brand | null>(null);
   const [voices, setVoices] = useState<VoiceOption[] | null>(null);

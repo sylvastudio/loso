@@ -2,6 +2,8 @@ import { z } from "zod";
 
 export const FONT_CHOICES = [
   "Montserrat",
+  "Inter",
+  "Playfair Display",
   "Archivo Black",
   "Bebas Neue",
   "Poppins",

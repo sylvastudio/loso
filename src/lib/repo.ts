@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import { getDb } from "./db";
 import { brandSchema, defaultBrand, type Brand } from "./brand";
+import type { CompositorDoc } from "./compositor";
 import type { ProviderId } from "./providers";
 
 // ---------- kv ----------
@@ -90,10 +91,13 @@ export function setBrand(brand: Brand) {
 // ---------- projects ----------
 
 export interface ProjectSettings {
+  kind?: "ai-short" | "compositor";
   pace: "single" | "chill" | "normal" | "fast";
   captionStyle: "clean" | "dynamic";
   voiceId: string | null;
   voice?: { stability: number; similarity: number; style: number; speed: number };
+  // Present only for compositor projects — the full layer document.
+  compositor?: CompositorDoc;
 }
 
 export interface Project {
@@ -117,6 +121,7 @@ interface ProjectRow {
 }
 
 const defaultSettings: ProjectSettings = {
+  kind: "ai-short",
   pace: "normal",
   captionStyle: "clean",
   voiceId: null,
