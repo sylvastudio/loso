@@ -14,6 +14,9 @@ const EXT_BY_MIME: Record<string, string> = {
   "audio/wav": "wav",
   "audio/x-wav": "wav",
   "audio/mp4": "m4a",
+  "video/mp4": "mp4",
+  "video/webm": "webm",
+  "video/quicktime": "mov",
 };
 
 export function storeAsset(
