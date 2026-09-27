@@ -30,10 +30,10 @@ export const PROVIDERS: ProviderInfo[] = [
     label: "Groq",
     role: "Transcription (Whisper) + LLM fallback",
     unlocks: "Word-level timestamps that drive word-synced captions",
-    degraded: "No word-synced captions — the pipeline stops after voiceover.",
+    degraded: "Optional — captions can also use local Whisper or your AI model's provider (Settings → AI model).",
     placeholder: "gsk_…",
     docsUrl: "https://console.groq.com/keys",
-    optional: false,
+    optional: true,
     live: true,
   },
   {

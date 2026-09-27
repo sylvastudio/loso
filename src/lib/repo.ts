@@ -36,6 +36,28 @@ export function setApiKey(provider: ProviderId, value: string) {
   else kvSet(`key.${provider}`, value.trim());
 }
 
+// ---------- AI model config (bring-your-own-model; see src/lib/ai) ----------
+// Stored as two kv rows so the key never travels with the JSON config:
+// "ai.config" (JSON, no key) and "ai.key" (raw key string).
+
+export function getAiConfigRaw(): string | null {
+  return kvGet("ai.config");
+}
+
+export function setAiConfigRaw(json: string | null) {
+  if (json === null) kvDelete("ai.config");
+  else kvSet("ai.config", json);
+}
+
+export function getAiKey(): string | null {
+  return kvGet("ai.key");
+}
+
+export function setAiKey(value: string | null) {
+  if (value === null || value.trim() === "") kvDelete("ai.key");
+  else kvSet("ai.key", value.trim());
+}
+
 // ---------- pronunciation dictionary ----------
 
 export interface PronunciationEntry {

@@ -14,6 +14,9 @@ export type Anim = z.infer<typeof animSchema>;
 const baseLayer = {
   id: z.string(),
   name: z.string().optional(), // user-facing label (defaults to the uploaded file name)
+  // Template slot: when this composition is saved as a template, slot layers
+  // are the parts a new video fills in (a title, a date, the main video…).
+  slot: z.string().optional(),
   x: z.number().default(0),
   y: z.number().default(0),
   width: z.number().default(200),

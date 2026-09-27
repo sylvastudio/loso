@@ -19,6 +19,23 @@ CREATE TABLE IF NOT EXISTS projects (
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS templates (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  doc TEXT NOT NULL,
+  builtin INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS agent_messages (
+  project_id TEXT NOT NULL,
+  seq INTEGER NOT NULL,
+  message TEXT NOT NULL,
+  turn TEXT NOT NULL DEFAULT '',
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (project_id, seq)
+);
 CREATE TABLE IF NOT EXISTS assets (
   hash TEXT PRIMARY KEY,
   ext TEXT NOT NULL,
@@ -39,9 +56,15 @@ function open(): Database.Database {
 }
 
 // Survive Next.js dev-server HMR without leaking connections.
-const g = globalThis as unknown as { __studioDb?: Database.Database };
+const g = globalThis as unknown as { __studioDb?: Database.Database; __studioSchema?: string };
 
 export function getDb(): Database.Database {
   if (!g.__studioDb) g.__studioDb = open();
+  // HMR keeps the connection alive across code changes; re-apply the
+  // (idempotent) schema whenever it changes so new tables appear.
+  if (g.__studioSchema !== SCHEMA) {
+    g.__studioDb.exec(SCHEMA);
+    g.__studioSchema = SCHEMA;
+  }
   return g.__studioDb;
 }
