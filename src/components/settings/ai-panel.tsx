@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { ArrowUpRight } from "lucide-react";
 import { fetchJson, jsonInit } from "@/lib/fetch-json";
+import { pickDefaultModel, rankModels } from "@/lib/ai/models";
 import type { ProviderPreset } from "@/lib/ai/presets";
 import type { ProviderPresetId } from "@/lib/ai/types";
 import { Button, ErrorState, InlineError, Input, Section, Select, StatusWord, cx } from "@/components/ui";
@@ -25,6 +26,7 @@ interface ConfigPayload {
   config: PublicConfig | null;
   presets: ProviderPreset[];
   transcription: { engine: string; detail: string; localWhisper: string | null; groqKey: boolean };
+  sharedKeys?: Array<{ preset: string; maskedKey: string }>;
 }
 
 interface TestResult {
@@ -96,7 +98,9 @@ export function AiPanel({ onDirtyChange }: { onDirtyChange?: (dirty: boolean) =>
   const saved = data?.config ?? null;
   const preset = data?.presets.find((p) => p.id === draft.preset) ?? null;
   const samePreset = saved?.preset === draft.preset;
-  const hasSavedKey = samePreset && !!saved?.hasKey;
+  // A key from Settings → Pipeline keys counts too (Groq, Anthropic share it).
+  const sharedKey = data?.sharedKeys?.find((k) => k.preset === draft.preset) ?? null;
+  const hasSavedKey = (samePreset && !!saved?.hasKey) || !!sharedKey;
   const showKey = !!preset && (preset.needsKey || preset.id === "custom");
 
   const dirty = useMemo(
@@ -104,6 +108,15 @@ export function AiPanel({ onDirtyChange }: { onDirtyChange?: (dirty: boolean) =>
     [draft, saved, keyDraft]
   );
   useEffect(() => onDirtyChange?.(dirty), [dirty, onDirtyChange]);
+
+  // Load the model list as soon as a provider is usable (listing is free),
+  // so nobody is left with a saved key and no model.
+  useEffect(() => {
+    if (!data || !preset || models || modelsBusy) return;
+    const keyOk = !preset.needsKey || hasSavedKey;
+    if (keyOk && (!preset.editableBaseUrl || draft.baseUrl.trim())) loadModels();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data, draft.preset, hasSavedKey]);
 
   function patch(p: Partial<Draft>) {
     setDraft((d) => ({ ...d, ...p }));
@@ -144,7 +157,8 @@ export function AiPanel({ onDirtyChange }: { onDirtyChange?: (dirty: boolean) =>
       const d = await fetchJson<{ models: string[] }>("/api/ai/models", jsonInit("POST", draftBody()));
       setModels(d.models);
       if (!d.models.length) setModelsError("The provider returned no models — type an id instead.");
-      else if (!draft.model) patch({ model: d.models[0] });
+      // Never default to models[0] (often a tiny or non-chat model): rank and keep a valid choice.
+      else setDraft((cur) => ({ ...cur, model: pickDefaultModel(d.models, cur.model) }));
       setTypeModel(!d.models.length);
     } catch (e) {
       setModelsError((e as Error).message);
@@ -228,7 +242,8 @@ export function AiPanel({ onDirtyChange }: { onDirtyChange?: (dirty: boolean) =>
     return <p className="py-16 text-center text-sm text-ink-faint">Loading AI model…</p>;
   }
 
-  const modelOptions = models ?? [];
+  const ranked = models ? rankModels(models) : null;
+  const modelOptions = ranked ? ranked.chat.map((m) => m.id) : [];
   const modelInList = !!draft.model && modelOptions.includes(draft.model);
   const needsKeyNow = !!preset?.needsKey && !hasSavedKey && !keyDraft.trim();
   const canQuery = !!preset && !needsKeyNow && (!preset.editableBaseUrl || !!draft.baseUrl.trim());
@@ -327,20 +342,25 @@ export function AiPanel({ onDirtyChange }: { onDirtyChange?: (dirty: boolean) =>
                       autoComplete="off"
                       aria-label={`${preset.label} API key`}
                       placeholder={
-                        hasSavedKey && saved?.maskedKey
-                          ? `Saved · ${saved.maskedKey} — paste to replace`
+                        hasSavedKey && (sharedKey?.maskedKey ?? saved?.maskedKey)
+                          ? `Saved · ${sharedKey?.maskedKey ?? saved?.maskedKey} — paste to replace`
                           : preset.keyHint
                       }
                       value={keyDraft}
                       onChange={(e) => setKeyDraft(e.target.value)}
                       className="font-mono text-[13px]"
                     />
-                    {hasSavedKey && !keyDraft && (
+                    {hasSavedKey && !keyDraft && !sharedKey && (
                       <Button size="sm" variant="danger" onClick={removeKey}>
                         Remove
                       </Button>
                     )}
                   </div>
+                  {(preset.id === "groq" || preset.id === "anthropic") && (
+                    <p className="mt-2 text-[12px] leading-relaxed text-ink-faint">
+                      Shared with Settings → Pipeline keys — one {preset.label} key for captions and the agent.
+                    </p>
+                  )}
                 </div>
               )}
               {!showKey && (
@@ -374,11 +394,22 @@ export function AiPanel({ onDirtyChange }: { onDirtyChange?: (dirty: boolean) =>
                     className="font-mono text-[13px]"
                   >
                     {!modelInList && <option value="">{draft.model ? `${draft.model} (typed)` : "Pick a model…"}</option>}
-                    {modelOptions.map((m) => (
-                      <option key={m} value={m}>
-                        {m}
+                    {ranked?.chat.map((m, i) => (
+                      <option key={m.id} value={m.id}>
+                        {m.id}
+                        {i === 0 ? "  · recommended" : ""}
+                        {m.vision ? "  · vision" : ""}
                       </option>
                     ))}
+                    {ranked && ranked.other.length > 0 && (
+                      <optgroup label={`Not chat models (${ranked.other.length})`}>
+                        {ranked.other.map((m) => (
+                          <option key={m} value={m} disabled>
+                            {m}
+                          </option>
+                        ))}
+                      </optgroup>
+                    )}
                   </Select>
                 ) : (
                   <Input
@@ -538,7 +569,7 @@ export function AiPanel({ onDirtyChange }: { onDirtyChange?: (dirty: boolean) =>
                 <InlineError className="max-w-xs">{`Save failed — ${saveError}`}</InlineError>
               ) : (
                 <span className="text-[13px] text-ink-dim">
-                  {needsKeyNow ? "Add an API key to finish" : "Unsaved changes"}
+                  {needsKeyNow ? "Add an API key to finish" : !draft.model.trim() ? "Pick a model to finish" : "Unsaved changes"}
                 </span>
               )}
               <Button
@@ -552,7 +583,7 @@ export function AiPanel({ onDirtyChange }: { onDirtyChange?: (dirty: boolean) =>
               >
                 Discard
               </Button>
-              <Button size="sm" onClick={save} disabled={saving || !draft.preset}>
+              <Button size="sm" onClick={save} disabled={saving || !draft.preset || !draft.model.trim() || needsKeyNow}>
                 {saving ? "Saving…" : saveError ? "Retry save" : "Save model"}
               </Button>
             </>

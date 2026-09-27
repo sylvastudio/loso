@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getAiConfig, saveAiConfig, testModel, type AiConfig } from "@/lib/ai";
+import { getAiConfig, recordLastTest, saveAiConfig, testModel, type AiConfig } from "@/lib/ai";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -32,6 +32,14 @@ export async function POST(req: Request) {
   ) {
     saveAiConfig({ vision: result.vision, tools: result.tools });
     persisted = true;
+  }
+  // Remember the outcome for the saved model (pass or fail) so the Agent tab
+  // can show "not tested / failed / ready" without re-testing.
+  if (saved && saved.model === result.model && (!draft.preset || draft.preset === saved.preset)) {
+    recordLastTest({
+      model: result.model, ok: result.ok, tools: result.tools, vision: result.vision,
+      error: result.error, latencyMs: result.latencyMs,
+    });
   }
   return NextResponse.json({ ...result, persisted });
 }

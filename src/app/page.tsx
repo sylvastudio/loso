@@ -352,7 +352,7 @@ export default function ProjectsPage() {
           </Button>
           {missingCount > 0 && (
             <Link
-              href="/settings"
+              href="/settings?tab=keys"
               className="text-[13px] text-ink-faint transition-colors hover:text-lime"
             >
               {missingCount} pipeline {missingCount === 1 ? "key" : "keys"} missing — finish setup →

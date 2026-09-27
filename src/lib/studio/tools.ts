@@ -138,40 +138,30 @@ const S = {
   }),
   arr: (items: unknown, description?: string) => ({ type: "array", items, ...(description ? { description } : {}) }),
 };
-const FOLDER = S.str("Absolute path (or ~/…) of the footage folder on this computer");
-const CLIP = S.str("Clip id — the file name without extension, from footage_scan");
+const FOLDER = S.str("footage folder path (absolute or ~/…)");
+const CLIP = S.str("clip id from footage_scan");
 
+// Compact on purpose: this schema is sent with every agent step, and small
+// providers (e.g. Groq's free tier, ~8k tokens/min) can't afford verbose schemas.
+const N = { type: "number" };
+const T = { type: "string" };
 const LAYER_FIELDS = S.obj(
   {
     type: { type: "string", enum: ["video", "image", "audio", "text"] },
-    id: S.str("optional; auto-generated"),
-    name: S.str("label shown in the layer list"),
-    slot: S.str("template slot name, e.g. title / date / video"),
-    x: S.num("px from left of canvas"), y: S.num("px from top"), width: S.num("px"), height: S.num("px"),
-    z: S.num("stacking order, higher = on top"),
-    fromSec: S.num("when the layer appears (seconds)"), durationSec: S.num("how long it stays (seconds)"),
-    opacity: S.num("0–1"), rotation: S.num("degrees"), radius: S.num("corner radius px"),
-    borderWidth: S.num("px"), borderColor: S.str("#hex"),
-    assetHash: S.str("media layers: hash from footage_cut / import_file"),
-    objectFit: { type: "string", enum: ["cover", "contain"] },
-    volume: S.num("0–1, video/audio"), trimStartSec: S.num("skip this many seconds into the media"),
-    text: S.str("text layers: the copy (\\n for line breaks)"),
-    fontFamily: { type: "string", enum: [...FONT_CHOICES] },
-    fontSize: S.num("px"), fontWeight: { type: "number", enum: [400, 700] },
-    color: S.str("#hex"), italic: { type: "boolean" },
-    align: { type: "string", enum: ["left", "center", "right"] },
-    backgroundColor: S.str("box fill, #hex or rgba(); omit for transparent"),
-    anim: S.obj(
-      {
-        preset: { type: "string", enum: ["none", "fade", "rise", "scale", "hero"] },
-        delay: S.num("frames"), duration: S.num("frames"),
-      },
-      ["preset"],
-      "entrance animation"
-    ),
+    id: T, name: T, slot: T,
+    x: N, y: N, width: N, height: N, z: N, fromSec: N, durationSec: N,
+    opacity: N, rotation: N, radius: N, borderWidth: N, borderColor: T,
+    assetHash: T, objectFit: { type: "string", enum: ["cover", "contain"] }, volume: N, trimStartSec: N,
+    text: T, fontFamily: { type: "string", enum: [...FONT_CHOICES] }, fontSize: N,
+    fontWeight: { type: "number", enum: [400, 700] }, color: T, italic: { type: "boolean" },
+    align: { type: "string", enum: ["left", "center", "right"] }, backgroundColor: T,
+    anim: S.obj({ preset: { type: "string", enum: ["none", "fade", "rise", "scale", "hero"] }, delay: N, duration: N }, ["preset"]),
   },
   ["type"]
 );
+const LAYER_HELP =
+  "Fields: px geometry (x,y,width,height; origin top-left), z (higher on top), fromSec/durationSec, " +
+  "opacity 0–1, colors as #hex or rgba(), assetHash for media, anim delay/duration in frames.";
 
 // ---------- the registry ----------
 
@@ -238,7 +228,7 @@ const TOOLS: ToolSpec[] = [
     description:
       "Add one or more layers. Only `type` is required — omitted fields get defaults (full-frame, full-length, " +
       "Inter 700 white text). A text layer with empty text + backgroundColor is a solid rectangle (cards, bars). " +
-      "Use seconds via fromSec/durationSec. Returns the new ids.",
+      "Returns the new ids. " + LAYER_HELP,
     parameters: S.obj({ layers: S.arr(LAYER_FIELDS) }, ["layers"]),
     needsProject: true,
     async run(ctx, a) {
@@ -253,9 +243,9 @@ const TOOLS: ToolSpec[] = [
   },
   {
     name: "update_layers",
-    description: "Change fields on existing layers by id (same fields as add_layers; seconds via fromSec/durationSec).",
+    description: "Change fields on layers by id. Each update is {id, …any add_layers fields to change}.",
     parameters: S.obj(
-      { updates: S.arr(S.obj({ ...(LAYER_FIELDS.properties as object), id: S.str("layer id") }, ["id"])) },
+      { updates: S.arr({ type: "object", properties: { id: T }, required: ["id"], description: "id + fields to change" }) },
       ["updates"]
     ),
     needsProject: true,
@@ -302,14 +292,14 @@ const TOOLS: ToolSpec[] = [
   {
     name: "add_captions",
     description:
-      "Add timed caption layers in one call. Each caption is one short line (≤ ~40 chars) shown from→to seconds. " +
-      "`box` places every caption (defaults to a band near the bottom); style is white Inter 700 on a dark translucent box.",
+      "Add timed captions (one short line each, ≤ ~40 chars, from→to seconds). `box` places them all " +
+      "(default: a band near the bottom); white Inter 700 on a dark translucent box.",
     parameters: S.obj(
       {
-        captions: S.arr(S.obj({ from: S.num("seconds"), to: S.num("seconds"), text: S.str("caption text") }, ["from", "to", "text"])),
-        box: S.obj({ x: S.num("px"), y: S.num("px"), width: S.num("px"), height: S.num("px") }),
-        fontSize: S.num("px, default 36"),
-        replaceExisting: { type: "boolean", description: "remove earlier layers named 'Caption …' first" },
+        captions: S.arr(S.obj({ from: N, to: N, text: T }, ["from", "to", "text"])),
+        box: S.obj({ x: N, y: N, width: N, height: N }),
+        fontSize: N,
+        replaceExisting: { type: "boolean", description: "remove existing 'Caption …' layers first" },
       },
       ["captions"]
     ),
@@ -496,20 +486,19 @@ const TOOLS: ToolSpec[] = [
   {
     name: "footage_cut",
     description:
-      "Cut an edit from the footage: `audio` pieces play in order (usually the speaker's sentences), `shots` play in " +
-      "order over them (their dur values should add up to durationSec), joined with short dissolves, each cropped to " +
-      "`window` (the size of the video box in your layout). focus = vertical crop centre 0–1, aim at faces. To " +
-      "lip-sync a shot, use the same clip and time as the audio playing then. Audio cuts snap to word boundaries. " +
-      "Returns assetHash for the edit (and a blurred full-frame copy when background is set). Takes a minute or two.",
+      "Cut an edit: `audio` pieces play in order (the words heard), `shots` play over them in order (dur values " +
+      "sum to durationSec), with short dissolves, each cropped to `window` (the video box size in your layout). " +
+      "focus = vertical crop centre 0–1 (aim at faces). Lip-sync = same clip+time as the audio then. Audio cuts " +
+      "snap to word boundaries. Returns editAssetHash (+ backgroundAssetHash if `background` size given).",
     parameters: S.obj(
       {
         folder: FOLDER,
-        audio: S.arr(S.obj({ clip: CLIP, from: S.num("s"), to: S.num("s") }, ["clip", "from", "to"])),
-        shots: S.arr(S.obj({ clip: CLIP, start: S.num("s into clip"), dur: S.num("s on the timeline"), focus: S.num("0–1") }, ["clip", "start", "dur"])),
-        window: S.obj({ width: S.num("px, even"), height: S.num("px, even") }, ["width", "height"]),
-        durationSec: S.num("total length"),
-        crossfade: S.num("dissolve length, default 0.2"),
-        background: S.obj({ width: S.num("px"), height: S.num("px") }, ["width", "height"], "also make a blurred copy this size"),
+        audio: S.arr(S.obj({ clip: T, from: N, to: N }, ["clip", "from", "to"])),
+        shots: S.arr(S.obj({ clip: T, start: N, dur: N, focus: N }, ["clip", "start", "dur"])),
+        window: S.obj({ width: N, height: N }, ["width", "height"]),
+        durationSec: N,
+        crossfade: N,
+        background: S.obj({ width: N, height: N }, ["width", "height"]),
       },
       ["folder", "audio", "shots", "window", "durationSec"]
     ),
@@ -601,7 +590,7 @@ const TOOLS: ToolSpec[] = [
         summary: S.str("one or two sentences: the story arc"),
         beats: S.arr(
           S.obj(
-            { from: S.num("timeline s"), to: S.num("timeline s"), heard: S.str("the words heard"), clip: CLIP, clipTime: S.num("s into clip for the picture"), caption: S.str("caption text") },
+            { from: { type: "number" }, to: { type: "number" }, heard: { type: "string" }, clip: { type: "string" }, clipTime: { type: "number" }, caption: { type: "string" } },
             ["from", "to", "clip", "clipTime"]
           )
         ),

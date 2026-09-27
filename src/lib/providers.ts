@@ -28,7 +28,7 @@ export const PROVIDERS: ProviderInfo[] = [
   {
     id: "groq",
     label: "Groq",
-    role: "Transcription (Whisper) + LLM fallback",
+    role: "Transcription · also the studio agent’s key when Groq is your AI model",
     unlocks: "Word-level timestamps that drive word-synced captions",
     degraded: "Optional — captions can also use local Whisper or your AI model's provider (Settings → AI model).",
     placeholder: "gsk_…",
