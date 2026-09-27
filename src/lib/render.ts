@@ -15,14 +15,14 @@ export const RENDERS_DIR = path.join(DATA_DIR, "renders");
 let browserPromise: Promise<unknown> | undefined;
 let bundlePromise: Promise<string> | undefined;
 
-function getBrowser() {
+export function getBrowser() {
   return (browserPromise ??= ensureBrowser().catch((e) => {
     browserPromise = undefined; // don't cache a failure
     throw e;
   }));
 }
 
-function getServeUrl() {
+export function getServeUrl() {
   return (bundlePromise ??= bundle({
     entryPoint: path.join(process.cwd(), "src/remotion/index.ts"),
   }).catch((e) => {
@@ -36,7 +36,7 @@ function getServeUrl() {
 // origin, so assets must come over http. The renderer's Chromium runs in child
 // processes and the route awaits asynchronously, so serving these concurrently
 // does not block the event loop. `baseUrl` is the request origin.
-function resolveDocForRender(doc: CompositorDoc, baseUrl: string): ResolvedCompositorDoc {
+export function resolveDocForRender(doc: CompositorDoc, baseUrl: string): ResolvedCompositorDoc {
   return {
     output: doc.output,
     layers: doc.layers.map((l) =>

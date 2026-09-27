@@ -4,11 +4,13 @@ import { Suspense, useCallback, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { KeysPanel } from "@/components/settings/keys-panel";
 import { BrandPanel } from "@/components/settings/brand-panel";
+import { AiPanel } from "@/components/settings/ai-panel";
 import { cx } from "@/components/ui";
 
 const TABS = [
   { id: "keys", label: "API Keys" },
   { id: "brand", label: "Brand" },
+  { id: "ai", label: "AI model" },
 ] as const;
 
 type TabId = (typeof TABS)[number]["id"];
@@ -25,14 +27,16 @@ export default function SettingsPage() {
 function SettingsInner() {
   const router = useRouter();
   const params = useSearchParams();
-  const tab: TabId = params.get("tab") === "brand" ? "brand" : "keys";
+  const raw = params.get("tab");
+  const tab: TabId = TABS.some((t) => t.id === raw) ? (raw as TabId) : "keys";
   const setTab = (t: TabId) => router.replace(t === "keys" ? "/settings" : `/settings?tab=${t}`, { scroll: false });
 
-  // Warn before leaving with unsaved brand edits or pasted-but-unsaved keys.
-  const [dirty, setDirty] = useState({ keys: false, brand: false });
+  // Warn before leaving with unsaved brand edits, pasted-but-unsaved keys, or AI model edits.
+  const [dirty, setDirty] = useState({ keys: false, brand: false, ai: false });
   const onKeysDirty = useCallback((v: boolean) => setDirty((d) => ({ ...d, keys: v })), []);
   const onBrandDirty = useCallback((v: boolean) => setDirty((d) => ({ ...d, brand: v })), []);
-  const anyDirty = dirty.keys || dirty.brand;
+  const onAiDirty = useCallback((v: boolean) => setDirty((d) => ({ ...d, ai: v })), []);
+  const anyDirty = dirty.keys || dirty.brand || dirty.ai;
   useEffect(() => {
     if (!anyDirty) return;
     const warn = (e: BeforeUnloadEvent) => e.preventDefault();
@@ -72,13 +76,16 @@ function SettingsInner() {
         </div>
       </header>
 
-      {/* Both panels stay mounted so switching tabs never drops unsaved edits. */}
+      {/* All panels stay mounted so switching tabs never drops unsaved edits. */}
       <div className="pt-2">
         <div hidden={tab !== "keys"}>
           <KeysPanel onDirtyChange={onKeysDirty} />
         </div>
         <div hidden={tab !== "brand"}>
           <BrandPanel onDirtyChange={onBrandDirty} />
+        </div>
+        <div hidden={tab !== "ai"}>
+          <AiPanel onDirtyChange={onAiDirty} />
         </div>
       </div>
     </div>

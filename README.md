@@ -1,6 +1,10 @@
 # Loso — Faceless Short-Video Studio
 
-A single-tenant web app for making short videos two ways:
+A local, single-user web app for making short videos. It has a built-in **studio agent that runs on
+your own AI model**: OpenAI, xAI Grok, Anthropic Claude, Google Gemini, Groq, OpenRouter, or a local model
+via Ollama / LM Studio. You can also drive Loso from Claude Code, Cursor or Codex over **MCP**.
+
+Two kinds of project:
 
 - **AI short** — turn a **written script + your branding + your own API keys** into a
   polished, captioned, voiced vertical short. Paste a script; Loso voices it (ElevenLabs
@@ -106,6 +110,86 @@ the mode is stored per project.)
   outside the app while its tab is open, reload the page first so the editor doesn't overwrite
   your changes on its next autosave.
 
+## Studio agent: bring your own model
+
+Every Compositor project has an **Agent** tab (next to **Layer** in the right rail). You chat with it
+like a video editor. It works on the live canvas, so you watch the layers appear as it builds.
+
+**1. Connect a model:** go to Settings → **AI model**, pick a provider, paste a key (local servers need
+none), choose a model with **Load models**, then press **Test model**. The test checks whether the model
+can **call tools** (required) and **see images** (strongly recommended: it lets the agent read contact
+sheets, study your reference screenshots and check its own layouts).
+
+| Provider | Notes |
+| --- | --- |
+| OpenAI · xAI (Grok) · Groq · OpenRouter · custom | One OpenAI-compatible adapter; change the base URL for any compatible server |
+| Anthropic (Claude) | Native Messages API adapter |
+| Google Gemini | Native generateContent adapter |
+| Ollama · LM Studio | Local, no key. Use a model that supports tool calling; a vision model (e.g. a Qwen-VL / LLaVA variant) unlocks the visual tools |
+
+**Transcription** (word timings drive every cut): OpenAI (`whisper-1`) or Groq keys transcribe with
+word timings. Otherwise Loso uses **local Whisper** (`pip install mlx-whisper` on Apple Silicon, or
+`openai-whisper`) or a saved Groq key. The same layer powers AI Short captions.
+
+**2. Talk to it.** For example:
+
+> Make a 30-second short from the clips in ~/Downloads/Excerpt: the sermon plus audience reactions.
+> Here's the look I want [attach screenshot]. Ask me what you need first.
+
+It works the way the Sunday Galore video was made:
+
+1. **Survey:** it scans the folder in place (footage is never copied), reads a contact sheet per clip,
+   and transcribes the speech.
+2. **Ask:** questions it can't decide itself (card text, sound, style, captions) appear as a small form.
+3. **Storyboard:** it proposes the edit beat by beat (what's heard, what's seen, the caption), with real
+   frames from your footage. You approve it or ask for changes. Nothing is cut before you approve.
+4. **Cut:** after one more **Go ahead**, it cuts between sentences (cut points snap to word boundaries),
+   crops every shot to the video box, cleans up and levels the voice, and adds short dissolves.
+5. **Build:** it lays out the design (or applies a template), adds captions, then **renders a frame and
+   looks at it** to catch wrapping text, overlaps and bad crops before handing back.
+6. **Render:** it exports the MP4 when you ask (with one more confirmation).
+
+- **Undo:** everything the agent changed in a turn is one undo step (**Undo turn** in the chat header, or ⌘Z).
+- **Locking:** while it works, the canvas is locked so your edits and its edits can't collide.
+  **Stop** ends the turn.
+- **History:** the chat is saved per project. Clearing it keeps the canvas.
+
+## Templates
+
+A template is a saved design whose **slots** change for each video (a title, a date, the main
+video) while everything else stays fixed. The **Poster card** built for Sunday Galore ships as
+the built-in example.
+
+- **Make one:** build a canvas, mark layers as slots with the **Slot** field in the Layer tab, then
+  choose **+ Save this canvas as a template** (Templates, in the left rail). Or ask the agent:
+  "save this as a template; the title, date and video change each week."
+- **Use one:** click it under Templates. Replacing a canvas that has layers takes a second click.
+  The agent fills slots with `apply_template`, and single-line text slots shrink automatically so a
+  longer title never wraps.
+
+## MCP: use Loso from your own agent
+
+Everything the in-app agent can do is also exposed as tools over HTTP (`GET /api/tools`,
+`POST /api/tools/call`) and through a zero-dependency MCP server:
+
+```bash
+claude mcp add loso -- node /absolute/path/to/loso/mcp/loso-mcp.mjs   # Claude Code
+```
+
+See [`mcp/README.md`](mcp/README.md) for Cursor, Codex and other clients. Keep `pnpm dev` running.
+An editor tab that's open picks up changes made over MCP within a few seconds. Over MCP, your agent
+asks you its own questions, so the interactive tools (`ask_user`, `propose_storyboard`) aren't
+listed. Cutting and rendering run without Loso's confirmation step, so have your agent ask first.
+
+**Tools:**
+- `list_projects`, `create_project`
+- `get_composition`, `set_output`, `add_layers`, `update_layers`, `remove_layers`, `add_captions`,
+  `snapshot`
+- `list_templates`, `apply_template`, `save_template`, `delete_template`
+- `footage_scan`, `footage_contact_sheet`, `footage_frame`, `footage_transcribe`, `footage_words`,
+  `footage_cut`
+- `import_file`, `render_video`
+
 ## Recipe: sermon excerpt → 30s poster short
 
 This is a real workflow run end-to-end with Loso + [Claude Code](https://claude.com/claude-code):
@@ -114,6 +198,10 @@ own words carry the story, audience reactions are cut in over them, and the whol
 inside a white "poster card" (small corner labels, a date line, a huge **SUNDAY**, a video
 window, a badge row) with the same footage blurred behind it. Everything lands in a normal
 Compositor project, so every word, caption and position stays editable in Loso.
+
+> **Now built in:** the studio agent does this whole workflow inside the app on your own model (see
+> above). The scripts below are the standalone, no-AI version: handy for batch jobs, or when you'd
+> rather write the plan yourself.
 
 The scripts live in [`recipes/sermon-short/`](recipes/sermon-short):
 
@@ -223,6 +311,11 @@ Then open the project in Loso to tweak it, and hit **Export video** again.
 - [x] **UX pass**: autosave and flush-before-export, undoable deletes, clear error states, keyboard
   editing, accessible dialogs, contrast fixes, honest "coming soon" labels
 - [x] **Recipe**: sermon excerpt → 30s poster short (`recipes/sermon-short`)
+- [x] **Studio agent (bring your own model)**: OpenAI-compatible / Anthropic / Gemini adapters,
+  in-app chat with live canvas edits, questions + storyboard + confirm steps, snapshots, footage
+  tools, word-snapped cuts, per-turn undo
+- [x] **Templates** with slots (Poster card built in), auto-fit text slots
+- [x] **MCP server** + HTTP tool API
 - [ ] **M3** — AI shot list, pace-aware timeline, auto-sourced visuals
 - [ ] **M4** — Branding overlays + detached render job → MP4 download
 - [ ] **M5** — Editor polish: image library, refine prompts, pronunciation dictionary

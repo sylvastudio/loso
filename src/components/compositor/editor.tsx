@@ -19,6 +19,8 @@ import {
   Loader2,
   Music,
   Redo2,
+  Sparkles,
+  SlidersHorizontal,
   Trash2,
   Type as TypeIcon,
   Undo2,
@@ -27,6 +29,8 @@ import { Button, Field, InlineError, Select, cx } from "@/components/ui";
 import { FontLoader } from "@/components/font-loader";
 import { EditableTitle, NarrowScreenNote, SaveStatus, type SaveState } from "@/components/editor-chrome";
 import { fetchJson, jsonInit } from "@/lib/fetch-json";
+import { ChatPanel } from "@/components/agent/chat-panel";
+import { TemplatesSection } from "@/components/compositor/templates-section";
 import { CompositorComposition } from "@/remotion/compositor";
 import { FONT_CHOICES } from "@/lib/brand";
 import {
@@ -133,8 +137,15 @@ function SliderRow({
 // undo step so one drag isn't dozens of entries; discrete edits each get one.
 
 type DocUpdater = CompositorDoc | ((d: CompositorDoc) => CompositorDoc);
-type History = { past: CompositorDoc[]; present: CompositorDoc; future: CompositorDoc[]; ts: number };
-type HistoryAction = { type: "set"; updater: DocUpdater } | { type: "undo" } | { type: "redo" };
+// `group` tags the present entry when it came from outside the editor (an
+// agent turn, an MCP edit): consecutive changes with the same group collapse
+// into one undo step, so "undo" reverts a whole agent turn at once.
+type History = { past: CompositorDoc[]; present: CompositorDoc; future: CompositorDoc[]; ts: number; group?: string };
+type HistoryAction =
+  | { type: "set"; updater: DocUpdater }
+  | { type: "external"; doc: CompositorDoc; group: string }
+  | { type: "undo" }
+  | { type: "redo" };
 
 const COALESCE_MS = 450;
 const HISTORY_LIMIT = 100;
@@ -150,6 +161,10 @@ function historyReducer(s: History, a: HistoryAction): History {
       if (!s.future.length) return s;
       const next = s.future[0];
       return { past: [...s.past, s.present], present: next, future: s.future.slice(1), ts: 0 };
+    }
+    case "external": {
+      if (s.group === a.group) return { ...s, present: a.doc, future: [], ts: 0 };
+      return { past: [...s.past, s.present].slice(-HISTORY_LIMIT), present: a.doc, future: [], ts: 0, group: a.group };
     }
     case "set": {
       const next =
@@ -198,8 +213,15 @@ export function CompositorEditor({ project }: { project: ProjectShape }) {
   const [title, setTitle] = useState(project.title);
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [saveState, setSaveState] = useState<SaveState>("idle");
+  const [rightTab, setRightTab] = useState<"layer" | "agent">(
+    project.settings.compositor?.layers?.length ? "layer" : "agent"
+  );
+  const [agentBusy, setAgentBusy] = useState(false);
+  // updatedAt of the newest server copy we know about (ours or adopted)
+  const lastSeen = useRef(project.updatedAt);
 
   const stageRef = useRef<HTMLDivElement>(null);
+  const stageColRef = useRef<HTMLDivElement>(null);
   const firstRender = useRef(true);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const pendingKind = useRef<"video" | "image" | "audio">("image");
@@ -228,7 +250,8 @@ export function CompositorEditor({ project }: { project: ProjectShape }) {
       }
       setSaveState("saving");
       try {
-        await fetchJson(`/api/projects/${project.id}`, init);
+        const saved = await fetchJson<{ project: { updatedAt: number } }>(`/api/projects/${project.id}`, init);
+        lastSeen.current = Math.max(lastSeen.current, saved.project.updatedAt);
         setSaveState(pendingDoc.current ? "dirty" : "saved");
         return true;
       } catch {
@@ -358,15 +381,65 @@ export function CompositorEditor({ project }: { project: ProjectShape }) {
     });
   }
 
+  // ---- changes from outside the editor (the agent, MCP clients) ----
+  const docRef = useRef(doc);
+  docRef.current = doc;
+  const adoptExternal = useCallback((next: CompositorDoc, group: string) => {
+    const parsed = compositorDocSchema.safeParse(next);
+    if (!parsed.success) return;
+    if (JSON.stringify(parsed.data) === JSON.stringify(docRef.current)) return;
+    dispatch({ type: "external", doc: parsed.data, group });
+  }, []);
+
+  const syncFromServer = useCallback(
+    async (group: string) => {
+      if (pendingDoc.current) return;
+      try {
+        const d = await fetchJson<{ project: ProjectShape & { updatedAt: number } }>(`/api/projects/${project.id}`);
+        if (d.project.updatedAt <= lastSeen.current) return;
+        lastSeen.current = d.project.updatedAt;
+        if (d.project.settings.compositor) adoptExternal(d.project.settings.compositor, group);
+      } catch {
+        /* offline — try again next tick */
+      }
+    },
+    [project.id, adoptExternal]
+  );
+
+  // Poll for edits made by external agents (MCP) while the tab is idle.
+  useEffect(() => {
+    if (agentBusy) return;
+    const t = setInterval(() => {
+      if (document.visibilityState === "visible") syncFromServer(`ext-${Date.now() >> 14}`);
+    }, 4000);
+    return () => clearInterval(t);
+  }, [agentBusy, syncFromServer]);
+
+  const onAgentDoc = useCallback(
+    (next: CompositorDoc, turn: string) => {
+      lastSeen.current = Date.now();
+      adoptExternal(next, `agent-${turn}`);
+    },
+    [adoptExternal]
+  );
+  const onAgentBusy = useCallback((b: boolean) => {
+    setAgentBusy(b);
+    if (b) setSelectedId(null);
+  }, []);
+  const agentBeforeSend = useCallback(() => flush(), [flush]);
+  const canUndoTurn = useCallback((turn: string) => hist.group === `agent-${turn}`, [hist.group]);
+
   // ---- keyboard ----
   // ⌘Z / ⇧⌘Z undo·redo, Delete/Backspace remove, arrows nudge (⇧ = 10px),
   // ⌘D duplicate, [ / ] send back·bring forward, Esc deselect. Skipped while
   // typing so inputs keep their native behavior.
+  const agentBusyRef = useRef(false);
+  agentBusyRef.current = agentBusy;
   const onKeyRef = useRef<(e: KeyboardEvent) => void>(() => {});
   onKeyRef.current = (e: KeyboardEvent) => {
     const t = e.target as HTMLElement | null;
     const typing = !!t && (/^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName) || t.isContentEditable);
-    if (typing) return;
+    if (typing || agentBusyRef.current) return;
     const meta = e.metaKey || e.ctrlKey;
     const key = e.key.toLowerCase();
     if (meta && key === "z") {
@@ -694,6 +767,11 @@ export function CompositorEditor({ project }: { project: ProjectShape }) {
           </button>
         </div>
         <div className="flex-1" />
+        {agentBusy && (
+          <span className="micro flex items-center gap-2 text-lime">
+            <span className="led on blink" /> Agent working
+          </span>
+        )}
         {error && (
           <InlineError onDismiss={() => setError(null)} className="max-w-[360px]">
             {error}
@@ -729,7 +807,13 @@ export function CompositorEditor({ project }: { project: ProjectShape }) {
 
       <div className="flex min-h-0 flex-1">
         {/* left rail */}
-        <div className="flex w-[300px] shrink-0 flex-col gap-6 overflow-y-auto border-r border-line p-5">
+        <div
+          className={cx(
+            "flex w-[300px] shrink-0 flex-col gap-6 overflow-y-auto border-r border-line p-5 transition-opacity",
+            agentBusy && "pointer-events-none opacity-50"
+          )}
+          aria-busy={agentBusy}
+        >
           {/* output size */}
           <div className="flex flex-col gap-3">
             <span className="micro">Output</span>
@@ -792,6 +876,13 @@ export function CompositorEditor({ project }: { project: ProjectShape }) {
               </span>
             )}
           </div>
+
+          <TemplatesSection
+            projectId={project.id}
+            doc={doc}
+            beforeApply={() => flush()}
+            onApplied={(next) => adoptExternal(next, `tpl-${Date.now()}`)}
+          />
 
           {/* layer list */}
           <div className="flex flex-col gap-2 border-t border-line pt-5">
@@ -897,11 +988,13 @@ export function CompositorEditor({ project }: { project: ProjectShape }) {
           </div>
         </div>
 
-        {/* stage */}
-        <div className="flex min-w-0 flex-1 flex-col bg-void">
+        {/* stage + timeline: the stage is pinned to the viewport height (minus a
+            peek of the timeline header) so adding layers never shrinks the
+            canvas — the timeline lives below and the column scrolls to it. */}
+        <div ref={stageColRef} className="flex min-w-0 flex-1 flex-col overflow-y-auto bg-void">
           <div
             ref={stageRef}
-            className="relative flex flex-1 items-center justify-center overflow-hidden p-8"
+            className="relative flex h-[calc(100%-44px)] min-h-[320px] shrink-0 items-center justify-center overflow-hidden p-8"
             onDragEnter={(e) => {
               if (!e.dataTransfer.types.includes("Files")) return;
               dragDepth.current += 1;
@@ -920,6 +1013,13 @@ export function CompositorEditor({ project }: { project: ProjectShape }) {
             }}
             onPointerDown={() => setSelectedId(null)}
           >
+            {agentBusy && (
+              <div className="absolute inset-0 z-40 flex items-start justify-center bg-transparent pt-4">
+                <span className="micro rounded-full border border-lime/40 bg-black/80 px-3 py-1.5 text-lime backdrop-blur-sm">
+                  The agent is editing — watch it build
+                </span>
+              </div>
+            )}
             {dragOver && (
               <div className="pointer-events-none absolute inset-3 z-30 flex items-center justify-center border-2 border-dashed border-lime/70 bg-lime/5">
                 <span className="font-serif text-[22px] italic text-lime">Drop to add</span>
@@ -939,6 +1039,8 @@ export function CompositorEditor({ project }: { project: ProjectShape }) {
                   compositionHeight={output.height}
                   inputProps={{ doc: resolved }}
                   style={{ width: "100%", height: "100%" }}
+                  // open past the intro animations so a paused canvas shows the design, not a black frame 0
+                  initialFrame={Math.min(Math.max(0, output.durationInFrames - 1), Math.round(output.fps * 1.5))}
                   controls
                   loop
                 />
@@ -981,13 +1083,21 @@ export function CompositorEditor({ project }: { project: ProjectShape }) {
           </div>
 
           {/* timeline strip */}
-          <div className="shrink-0 border-t border-line px-6 py-3">
-            <div className="mb-2 flex items-center gap-3">
+          <div className="shrink-0 border-t border-line px-6 pb-6">
+            <button
+              type="button"
+              onClick={() =>
+                stageColRef.current?.scrollTo({ top: stageColRef.current.scrollHeight, behavior: "smooth" })
+              }
+              className="sticky top-0 z-10 -mx-6 mb-2 flex h-[43px] w-[calc(100%+3rem)] items-center gap-3 bg-void px-6 text-left"
+              title="Scroll to the timeline"
+            >
               <span className="micro">Timeline</span>
               <span className="font-mono text-[11px] text-ink-faint">
                 {durationSec.toFixed(1)}s · {output.fps}fps · {layers.length} layers
               </span>
-            </div>
+              {layers.length > 0 && <ChevronDown size={13} className="ml-auto text-ink-faint" />}
+            </button>
             <div className="flex flex-col gap-1">
               {sortedLayers.map((l) => {
                 const total = Math.max(1, output.durationInFrames);
@@ -1020,8 +1130,55 @@ export function CompositorEditor({ project }: { project: ProjectShape }) {
           </div>
         </div>
 
-        {/* inspector */}
-        <div className="w-[280px] shrink-0 overflow-y-auto border-l border-line p-5">
+        {/* right rail: layer inspector | studio agent */}
+        <div
+          className={cx(
+            "flex shrink-0 flex-col border-l border-line transition-[width] duration-200",
+            rightTab === "agent" ? "w-[380px]" : "w-[280px]"
+          )}
+        >
+          <div className="flex shrink-0 border-b border-line" role="tablist">
+            {(
+              [
+                ["layer", "Layer", SlidersHorizontal],
+                ["agent", "Agent", Sparkles],
+              ] as const
+            ).map(([id, label, Icon]) => (
+              <button
+                key={id}
+                type="button"
+                role="tab"
+                aria-selected={rightTab === id}
+                onClick={() => setRightTab(id)}
+                className={cx(
+                  "relative flex flex-1 items-center justify-center gap-1.5 py-2.5 text-[12.5px] transition-colors",
+                  rightTab === id ? "text-ink" : "text-ink-faint hover:text-ink-dim"
+                )}
+              >
+                <Icon size={12} className={id === "agent" && agentBusy ? "animate-pulse text-lime" : undefined} />
+                {label}
+                {rightTab === id && <span className="absolute inset-x-4 -bottom-px h-px bg-lime" />}
+              </button>
+            ))}
+          </div>
+          {/* the chat stays mounted so a running turn survives tab switches */}
+          <div className={cx("min-h-0 flex-1", rightTab === "agent" ? "flex flex-col" : "hidden")}>
+            <ChatPanel
+              projectId={project.id}
+              onDoc={onAgentDoc}
+              onBusyChange={onAgentBusy}
+              beforeSend={agentBeforeSend}
+              canUndoTurn={canUndoTurn}
+              onUndoTurn={undo}
+            />
+          </div>
+        <div
+          className={cx(
+            "min-h-0 flex-1 overflow-y-auto p-5",
+            rightTab !== "layer" && "hidden",
+            agentBusy && "pointer-events-none opacity-50"
+          )}
+        >
           {!selected ? (
             <div className="flex flex-col gap-4">
               <p className="text-[12.5px] leading-relaxed text-ink-faint">
@@ -1049,6 +1206,17 @@ export function CompositorEditor({ project }: { project: ProjectShape }) {
               <span className="micro truncate text-lime">
                 {selected.type} layer{selected.name ? ` · ${selected.name}` : ""}
               </span>
+              <label className="flex items-center gap-2" title="Name this layer as a template slot — the part that changes per video">
+                <span className="micro w-[52px] shrink-0">Slot</span>
+                <input
+                  value={selected.slot ?? ""}
+                  placeholder="fixed design"
+                  onChange={(e) =>
+                    patchLayer(selected.id, { slot: e.target.value.replace(/\s+/g, "_").toLowerCase() || undefined })
+                  }
+                  className="uline !py-1 font-mono text-[12px]"
+                />
+              </label>
 
               {selected.type === "text" && (
                 <div className="flex flex-col gap-3">
@@ -1307,6 +1475,7 @@ export function CompositorEditor({ project }: { project: ProjectShape }) {
               </Button>
             </div>
           )}
+        </div>
         </div>
       </div>
     </div>

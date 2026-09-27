@@ -137,6 +137,7 @@ function AiShortEditor({ id }: { id: string }) {
   const [previewingVoice, setPreviewingVoice] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [keys, setKeys] = useState<Record<string, boolean> | null>(null);
+  const [transcriber, setTranscriber] = useState<string | null>(null);
   const [saveState, setSaveState] = useState<SaveState>("idle");
   const previewAudio = useRef<HTMLAudioElement | null>(null);
   const scriptRef = useRef("");
@@ -156,6 +157,9 @@ function AiShortEditor({ id }: { id: string }) {
     fetchJson<{ keys: Array<{ id: string; set: boolean }> }>("/api/keys")
       .then((d) => setKeys(Object.fromEntries(d.keys.map((k) => [k.id, k.set]))))
       .catch(() => setKeys(null));
+    fetchJson<{ transcription?: { engine: string } }>("/api/ai/config")
+      .then((d) => setTranscriber(d.transcription?.engine ?? null))
+      .catch(() => setTranscriber(null));
     fetchJson<{ voices: VoiceOption[] }>("/api/voices")
       .then((d) => setVoices(d.voices))
       .catch((e: FetchError) =>
@@ -273,7 +277,7 @@ function AiShortEditor({ id }: { id: string }) {
       const synced = await fetchJson<{ project: Project }>(`/api/projects/${id}/transcribe`, {
         method: "POST",
       }).catch((e: FetchError) => {
-        throw new Error(e.body.error === "missing_key" ? "missing_key:Groq" : e.message);
+        throw new Error(e.body.error === "missing_key" ? "missing_key:transcription" : e.message);
       });
       setProject(synced.project);
     } catch (e) {
@@ -324,8 +328,8 @@ function AiShortEditor({ id }: { id: string }) {
   const blocker: { text: string; settings?: boolean } | null =
     keys && !keys.elevenlabs
       ? { text: "Add an ElevenLabs key", settings: true }
-      : keys && !keys.groq
-        ? { text: "Add a Groq key for captions", settings: true }
+      : transcriber === "none"
+        ? { text: "Set up transcription for captions", settings: true }
         : voicesError && voicesError !== "missing_key"
           ? { text: "Voices couldn't load" }
           : !project.script.trim()
