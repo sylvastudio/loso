@@ -1,0 +1,49 @@
+{
+  "footage": "~/Downloads/Excerpt",
+  "fps": 30,
+  "duration": 30,
+  "crossfade": 0.2,
+  "window": { "width": 870, "height": 820 },
+
+  "audio": [
+    { "clip": "IMG_0732", "from": 26.00, "to": 34.25, "says": "And David said… How can I be in this beautiful palace, this beautiful kingdom?" },
+    { "clip": "IMG_0733", "from": 0.00,  "to": 9.85,  "says": "The prophet came to meet him… I will give him an everlasting kingdom." },
+    { "clip": "IMG_0734", "from": 35.30, "to": 39.40, "says": "I mean he planned for the temple. He planned for it." },
+    { "clip": "IMG_0734", "from": 47.45, "to": 55.55, "says": "He planned for God's house. Do you know God is very interested in those that plan for His house?" }
+  ],
+
+  "shots": [
+    { "clip": "IMG_0731", "start": 1.5,  "dur": 2.8, "focus": 0.40, "note": "wide stage, establishing" },
+    { "clip": "IMG_0731", "start": 13.0, "dur": 5.4, "focus": 0.50, "note": "speaker, medium" },
+    { "clip": "IMG_0735", "start": 2.0,  "dur": 3.0, "focus": 0.45, "note": "women listening, taking notes" },
+    { "clip": "IMG_0733", "start": 3.0,  "dur": 6.8, "focus": 0.42, "note": "zoom to speaker — lip-synced with audio[1]" },
+    { "clip": "IMG_0734", "start": 44.4, "dur": 4.1, "focus": 0.42, "note": "young man listening" },
+    { "clip": "IMG_0735", "start": 24.6, "dur": 3.5, "focus": 0.55, "note": "hands writing notes" },
+    { "clip": "IMG_0734", "start": 49.0, "dur": 2.6, "focus": 0.42, "note": "woman, chin on hand" },
+    { "clip": "IMG_0733", "start": 10.3, "dur": 2.0, "focus": 0.45, "note": "wide room — 'His house'" }
+  ],
+
+  "card": {
+    "left": "PROJECT 1 MILLION",
+    "right": "RHAPSODY OF REALITIES",
+    "date": "27 — SEPTEMBER",
+    "title": "SUNDAY",
+    "badges": "(P1M)     ▮▮▮▮▮ DVI HD     RHAPSODY 2026     STEREO     ™"
+  },
+
+  "captions": [
+    { "from": 0.40,  "to": 4.40,  "text": "Sitting on his throne, David said:" },
+    { "from": 4.40,  "to": 7.10,  "text": "“How can I be in this beautiful palace," },
+    { "from": 7.10,  "to": 8.30,  "text": "this beautiful kingdom?”" },
+    { "from": 8.30,  "to": 10.90, "text": "The prophet came to meet him" },
+    { "from": 10.90, "to": 12.40, "text": "and told him," },
+    { "from": 12.40, "to": 13.51, "text": "“Because of this thing" },
+    { "from": 13.51, "to": 14.80, "text": "you’ve thought about…" },
+    { "from": 14.80, "to": 17.95, "text": "I will give him an everlasting kingdom.”" },
+    { "from": 17.95, "to": 20.60, "text": "He planned for the temple." },
+    { "from": 20.60, "to": 22.10, "text": "He planned for it." },
+    { "from": 22.10, "to": 25.00, "text": "He planned for God’s house." },
+    { "from": 25.00, "to": 27.35, "text": "Do you know God is very interested" },
+    { "from": 27.35, "to": 30.00, "text": "in those that plan for His house?" }
+  ]
+}

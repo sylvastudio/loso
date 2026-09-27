@@ -1,11 +1,13 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { Film, Layers, Plus, Trash2 } from "lucide-react";
 import { Thumbnail } from "@remotion/player";
-import { Button, Field, Input, Select, Textarea, cx } from "@/components/ui";
+import { Button, ErrorState, Field, InlineError, Input, Select, Textarea, cx } from "@/components/ui";
+import { fetchJson, jsonInit } from "@/lib/fetch-json";
+import { LIVE_REQUIRED } from "@/lib/providers";
 import { CompositorComposition } from "@/remotion/compositor";
 import {
   compositorDocSchema,
@@ -72,6 +74,7 @@ function ModeCard({
   return (
     <button
       type="button"
+      aria-pressed={active}
       onClick={onClick}
       className={cx(
         "flex flex-col gap-2 rounded-lg border p-4 text-left transition-colors",
@@ -93,38 +96,92 @@ function NewProjectModal({ onClose }: { onClose: () => void }) {
   const [pace, setPace] = useState("normal");
   const [captionStyle, setCaptionStyle] = useState("clean");
   const [creating, setCreating] = useState(false);
+  const [createError, setCreateError] = useState<string | null>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
 
   const words = script.trim() ? script.trim().split(/\s+/).length : 0;
   const isCompositor = kind === "compositor";
 
+  const canCreate = (isCompositor || !!script.trim()) && !creating;
+
   async function create() {
+    if (!canCreate) return;
     setCreating(true);
+    setCreateError(null);
     const settings = isCompositor
       ? { kind, compositor: emptyCompositorDoc() }
       : { kind, pace, captionStyle };
-    const res = await fetch("/api/projects", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ title, script: isCompositor ? "" : script, settings }),
-    });
-    const d = await res.json();
-    router.push(`/project/${d.project.id}`);
+    try {
+      const d = await fetchJson<{ project: { id: string } }>(
+        "/api/projects",
+        jsonInit("POST", { title, script: isCompositor ? "" : script, settings })
+      );
+      router.push(`/project/${d.project.id}`);
+    } catch (e) {
+      setCreateError(`Couldn't create the project — ${(e as Error).message}`);
+      setCreating(false);
+    }
   }
+
+  // Dialog behavior: Escape closes, Tab is trapped inside, ⌘/Ctrl+Enter
+  // creates, and focus returns to whatever opened the dialog.
+  const createRef = useRef(create);
+  createRef.current = create;
+  useEffect(() => {
+    const opener = document.activeElement as HTMLElement | null;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        onClose();
+        return;
+      }
+      if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+        e.preventDefault();
+        createRef.current();
+        return;
+      }
+      if (e.key !== "Tab" || !dialogRef.current) return;
+      const focusable = dialogRef.current.querySelectorAll<HTMLElement>(
+        'button:not([disabled]), input, textarea, select, a[href], [tabindex]:not([tabindex="-1"])'
+      );
+      if (!focusable.length) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      opener?.focus?.();
+    };
+  }, [onClose]);
 
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-6 backdrop-blur-[2px]"
       onMouseDown={(e) => e.target === e.currentTarget && onClose()}
     >
-      <div className="rise w-full max-w-xl border border-line-strong bg-black shadow-[0_40px_120px_-30px_rgba(0,0,0,1)]">
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="new-project-title"
+        className="rise max-h-full w-full max-w-xl overflow-y-auto border border-line-strong bg-black shadow-[0_40px_120px_-30px_rgba(0,0,0,1)]"
+      >
         <header className="border-b border-line px-7 pb-5 pt-6">
-          <h2 className="font-serif text-[26px] italic tracking-tight">
+          <h2 id="new-project-title" className="font-serif text-[26px] italic tracking-tight">
             {isCompositor ? "New composition" : "New short"}
           </h2>
           <p className="mt-1 text-[13px] text-ink-dim">
             {isCompositor
               ? "A blank canvas — drop in video, images, and copy, then export."
-              : "Paste the narration — Loso voices it, captions it, and cuts visuals to the beat."}
+              : "Paste the narration — Loso voices it and captions it word-for-word. Visuals are coming soon."}
           </p>
         </header>
         <div className="flex flex-col gap-6 px-7 py-6">
@@ -161,12 +218,12 @@ function NewProjectModal({ onClose }: { onClose: () => void }) {
                 <Textarea
                   rows={7}
                   value={script}
-                  placeholder="Every word will be voiced, captioned word-for-word, and matched to visuals…"
+                  placeholder="Every word will be voiced and captioned word-for-word…"
                   onChange={(e) => setScript(e.target.value)}
                 />
               </Field>
               <div className="grid grid-cols-2 gap-8">
-                <Field label="Pace">
+                <Field label="Pace" hint="applies when visuals ship">
                   <Select value={pace} onChange={(e) => setPace(e.target.value)}>
                     <option value="chill">Chill · ~9s per shot</option>
                     <option value="normal">Normal · ~6s per shot</option>
@@ -184,11 +241,20 @@ function NewProjectModal({ onClose }: { onClose: () => void }) {
             </>
           )}
         </div>
-        <footer className="flex justify-end gap-3 border-t border-line px-7 py-4">
+        <footer className="flex items-center justify-end gap-3 border-t border-line px-7 py-4">
+          {createError ? (
+            <InlineError className="mr-auto" onDismiss={() => setCreateError(null)}>
+              {createError}
+            </InlineError>
+          ) : (
+            <span className="mr-auto hidden font-mono text-[10.5px] text-ink-faint sm:inline">
+              ⌘↵ to create · esc to close
+            </span>
+          )}
           <Button variant="ghost" onClick={onClose}>
             Cancel
           </Button>
-          <Button onClick={create} disabled={(!isCompositor && !script.trim()) || creating}>
+          <Button onClick={create} disabled={!canCreate}>
             {creating ? "Creating…" : "Create"}
           </Button>
         </footer>
@@ -197,32 +263,72 @@ function NewProjectModal({ onClose }: { onClose: () => void }) {
   );
 }
 
+const UNDO_MS = 6000;
+
 export default function ProjectsPage() {
   const [projects, setProjects] = useState<ProjectListItem[] | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [showNew, setShowNew] = useState(false);
   const [missingCount, setMissingCount] = useState(0);
+  // Deletes are deferred so they can be undone; the row is hidden meanwhile.
+  const [pendingDelete, setPendingDelete] = useState<{ id: string; title: string } | null>(null);
+  const deleteTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingRef = useRef<string | null>(null);
 
-  function refresh() {
-    fetch("/api/projects")
-      .then((r) => r.json())
-      .then((d) => setProjects(d.projects));
-  }
+  const refresh = useCallback(() => {
+    setLoadError(null);
+    fetchJson<{ projects: ProjectListItem[] }>("/api/projects")
+      .then((d) => setProjects(d.projects))
+      .catch((e: Error) => setLoadError(e.message));
+  }, []);
 
   useEffect(() => {
     refresh();
-    fetch("/api/keys")
-      .then((r) => r.json())
+    fetchJson<{ keys: Array<{ id: string; set: boolean }> }>("/api/keys")
       .then((d) =>
-        setMissingCount(
-          d.keys.filter((k: { id: string; set: boolean }) => k.id !== "serpapi" && !k.set).length
-        )
-      );
-  }, []);
+        setMissingCount(LIVE_REQUIRED.filter((p) => !d.keys.find((k) => k.id === p.id)?.set).length)
+      )
+      .catch(() => setMissingCount(0));
+  }, [refresh]);
 
-  async function remove(id: string) {
-    await fetch(`/api/projects/${id}`, { method: "DELETE" });
-    refresh();
+  const commitDelete = useCallback(
+    (id: string, keepalive = false) => {
+      if (deleteTimer.current) clearTimeout(deleteTimer.current);
+      deleteTimer.current = null;
+      pendingRef.current = null;
+      setPendingDelete(null);
+      fetch(`/api/projects/${id}`, { method: "DELETE", keepalive })
+        .then(() => !keepalive && refresh())
+        .catch(() => {});
+    },
+    [refresh]
+  );
+
+  function remove(p: ProjectListItem) {
+    if (pendingRef.current) commitDelete(pendingRef.current); // one pending at a time
+    pendingRef.current = p.id;
+    setPendingDelete({ id: p.id, title: p.title });
+    deleteTimer.current = setTimeout(() => commitDelete(p.id), UNDO_MS);
   }
+
+  function undoDelete() {
+    if (deleteTimer.current) clearTimeout(deleteTimer.current);
+    deleteTimer.current = null;
+    pendingRef.current = null;
+    setPendingDelete(null);
+  }
+
+  // Leaving the page (navigation or tab close) commits a pending delete.
+  useEffect(() => {
+    const flush = () => pendingRef.current && commitDelete(pendingRef.current, true);
+    window.addEventListener("pagehide", flush);
+    return () => {
+      window.removeEventListener("pagehide", flush);
+      flush();
+    };
+  }, [commitDelete]);
+
+  const visible = projects?.filter((p) => p.id !== pendingDelete?.id) ?? null;
 
   return (
     <div className="mx-auto max-w-5xl px-8 pb-24">
@@ -235,14 +341,14 @@ export default function ProjectsPage() {
         >
           Script in.
           <br />
-          <em className="text-lime">Branded short</em> out.
+          <em className="text-lime">Captioned short</em> out.
         </h1>
         <div
           className="rise mt-8 flex items-center gap-5"
           style={{ animationDelay: "140ms" }}
         >
           <Button onClick={() => setShowNew(true)}>
-            <Plus size={15} /> New short
+            <Plus size={15} /> New project
           </Button>
           {missingCount > 0 && (
             <Link
@@ -255,10 +361,18 @@ export default function ProjectsPage() {
         </div>
       </header>
 
+      {loadError && (
+        <ErrorState detail={`Your projects couldn't load (${loadError}).`} onRetry={refresh} />
+      )}
+
+      {!loadError && projects === null && (
+        <p className="py-16 text-center text-sm text-ink-faint">Loading projects…</p>
+      )}
+
       {/* Poster grid */}
-      {projects !== null && projects.length > 0 && (
+      {visible !== null && visible.length > 0 && (
         <div className="grid grid-cols-2 gap-x-6 gap-y-10 pt-10 sm:grid-cols-3 md:grid-cols-4">
-          {projects.map((p, i) => {
+          {visible.map((p, i) => {
             const isCompositor = p.settings.kind === "compositor";
             const doc = isCompositor
               ? compositorDocSchema.safeParse(p.settings.compositor)
@@ -290,7 +404,7 @@ export default function ProjectsPage() {
                 )}
 
                 <p className={cx("micro relative", hasThumb ? "m-3 text-ink/85" : "m-4")}>
-                  {isCompositor ? "compositor" : p.settings.pace}
+                  {isCompositor ? "compositor" : "ai short"}
                 </p>
                 {!hasThumb && (
                   <p className="relative m-4 mt-0 font-serif text-[17px] italic leading-snug tracking-tight text-ink">
@@ -303,13 +417,15 @@ export default function ProjectsPage() {
                   </p>
                 )}
                 <button
-                  className="absolute right-2.5 top-2.5 p-1 text-ink-faint opacity-0 transition-opacity hover:text-danger group-hover:opacity-100"
+                  aria-label={`Delete ${p.title}`}
+                  title="Delete project"
+                  className="absolute right-1.5 top-1.5 flex h-8 w-8 items-center justify-center bg-black/40 text-ink-dim opacity-0 transition-opacity hover:text-danger focus-visible:opacity-100 group-hover:opacity-100 group-focus-within:opacity-100"
                   onClick={(e) => {
                     e.preventDefault();
-                    remove(p.id);
+                    remove(p);
                   }}
                 >
-                  <Trash2 size={13} />
+                  <Trash2 size={14} />
                 </button>
               </div>
               <div className="mt-2 flex items-baseline justify-between">
@@ -330,7 +446,7 @@ export default function ProjectsPage() {
         </div>
       )}
 
-      {projects !== null && projects.length === 0 && (
+      {visible !== null && visible.length === 0 && (
         <div className="rise pt-10" style={{ animationDelay: "220ms" }}>
           <button
             onClick={() => setShowNew(true)}
@@ -340,9 +456,9 @@ export default function ProjectsPage() {
             <span className="micro">01</span>
             <span>
               <span className="font-serif text-[18px] italic leading-snug text-ink-dim transition-colors group-hover:text-ink">
-                Your first short
+                Start with a script
                 <br />
-                starts with a script.
+                — or a blank canvas.
               </span>
               <span className="mt-3 block text-[12px] text-ink-faint">
                 Click to begin →
@@ -353,6 +469,26 @@ export default function ProjectsPage() {
       )}
 
       {showNew && <NewProjectModal onClose={() => setShowNew(false)} />}
+
+      {/* Undo toast for deferred deletes */}
+      <div
+        className={cx(
+          "pointer-events-none fixed inset-x-0 bottom-0 z-40 flex justify-center pb-6 transition-all duration-300",
+          pendingDelete ? "translate-y-0 opacity-100" : "translate-y-4 opacity-0"
+        )}
+        aria-live="polite"
+      >
+        {pendingDelete && (
+          <div className="pointer-events-auto flex items-center gap-4 border border-line-strong bg-black/90 py-2.5 pl-5 pr-2.5 backdrop-blur-md">
+            <span className="max-w-[260px] truncate text-[13px] text-ink-dim">
+              Deleted <span className="font-serif italic text-ink">{pendingDelete.title}</span>
+            </span>
+            <Button size="sm" onClick={undoDelete}>
+              Undo
+            </Button>
+          </div>
+        )}
+      </div>
     </div>
   );
 }

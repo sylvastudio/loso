@@ -8,7 +8,8 @@
   --color-line-strong: #2e2e36;
   --color-ink: #f2f1ec;
   --color-ink-dim: #8f8f97;
-  --color-ink-faint: #55555c;
+  --color-ink-faint: #7c7c84; /* text-safe muted (~4.6:1 on black) */
+  --color-ink-ghost: #55555c; /* decoration only — never body text */
   --color-lime: #d4f53c;
   --color-lime-deep: #b8dc22;
   --color-danger: #ff5c5c;
@@ -53,6 +54,9 @@ body::after {
   scrollbar-color: var(--color-line-strong) transparent;
 }
 
+/* Component classes live in a layer so Tailwind utilities (text-lime, etc.)
+   can override them — unlayered CSS would always win. */
+@layer components {
 /* Editorial underline input */
 .uline {
   background: transparent;
@@ -71,6 +75,12 @@ body::after {
 }
 .uline:focus {
   border-bottom-color: var(--color-lime);
+}
+
+/* Visible keyboard focus everywhere (mouse clicks stay quiet) */
+:where(button, a, [role="button"], [tabindex], summary):focus-visible {
+  outline: 1px solid var(--color-lime);
+  outline-offset: 2px;
 }
 
 /* Micro label */
@@ -92,6 +102,7 @@ body::after {
 .led.on {
   background: var(--color-lime);
   box-shadow: 0 0 6px color-mix(in srgb, var(--color-lime) 70%, transparent);
+}
 }
 
 @keyframes rise-in {

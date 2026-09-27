@@ -11,6 +11,8 @@ import {
   AlignStartHorizontal,
   AlignStartVertical,
   ArrowLeft,
+  ChevronDown,
+  ChevronUp,
   Download,
   Film,
   Image as ImageIcon,
@@ -21,8 +23,10 @@ import {
   Type as TypeIcon,
   Undo2,
 } from "lucide-react";
-import { Button, Field, Select, cx } from "@/components/ui";
+import { Button, Field, InlineError, Select, cx } from "@/components/ui";
 import { FontLoader } from "@/components/font-loader";
+import { EditableTitle, NarrowScreenNote, SaveStatus, type SaveState } from "@/components/editor-chrome";
+import { fetchJson, jsonInit } from "@/lib/fetch-json";
 import { CompositorComposition } from "@/remotion/compositor";
 import { FONT_CHOICES } from "@/lib/brand";
 import {
@@ -38,11 +42,22 @@ import {
 interface ProjectShape {
   id: string;
   title: string;
+  updatedAt: number;
   settings: { kind?: string; compositor?: CompositorDoc };
   artifacts: { render?: { url: string; renderedAt: number } };
 }
 
 const TYPE_ICON = { video: Film, image: ImageIcon, audio: Music, text: TypeIcon } as const;
+
+function layerLabel(l: Layer): string {
+  if (l.name) return l.name;
+  if (l.type === "text") return l.text || "Text";
+  return l.type;
+}
+
+function safeFileName(title: string) {
+  return title.replace(/[^\w\- ]+/g, "").trim() || "loso";
+}
 
 let seq = 0;
 function newId(prefix: string) {
@@ -100,6 +115,7 @@ function SliderRow({
       <span className="micro w-[52px] shrink-0">{label}</span>
       <input
         type="range"
+        aria-label={label}
         min={min}
         max={max}
         step={step}
@@ -165,10 +181,23 @@ export function CompositorEditor({ project }: { project: ProjectShape }) {
   const canRedo = hist.future.length > 0;
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [stageBox, setStageBox] = useState({ w: 0, h: 0 });
-  const [uploading, setUploading] = useState(false);
+  const [uploading, setUploading] = useState<{ i: number; n: number; name: string } | null>(null);
+  const [dragOver, setDragOver] = useState(false);
+  const dragDepth = useRef(0);
   const [rendering, setRendering] = useState(false);
+  const [renderElapsed, setRenderElapsed] = useState(0);
   const [renderUrl, setRenderUrl] = useState<string | null>(project.artifacts.render?.url ?? null);
+  // The doc the current export was rendered from. Any later edit makes the
+  // download stale. On load, an export is current only if nothing was saved
+  // after it (render writes updatedAt ≈ renderedAt).
+  const [renderedDoc, setRenderedDoc] = useState<CompositorDoc | null>(() => {
+    const r = project.artifacts.render;
+    return r && project.updatedAt - r.renderedAt < 2000 ? hist.present : null;
+  });
   const [error, setError] = useState<string | null>(null);
+  const [title, setTitle] = useState(project.title);
+  const [renamingId, setRenamingId] = useState<string | null>(null);
+  const [saveState, setSaveState] = useState<SaveState>("idle");
 
   const stageRef = useRef<HTMLDivElement>(null);
   const firstRender = useRef(true);
@@ -178,37 +207,58 @@ export function CompositorEditor({ project }: { project: ProjectShape }) {
   const { output, layers } = doc;
   const selected = layers.find((l) => l.id === selectedId) ?? null;
 
-  // ---- persistence (debounced full-doc save) ----
+  // ---- persistence (debounced full-doc save, flushable) ----
+  // The latest unsaved doc lives in pendingDoc; flush() writes it now. Export
+  // flushes first so it never renders a stale copy, and leaving the page
+  // flushes with keepalive so the last edit survives navigation / tab close.
+  const pendingDoc = useRef<CompositorDoc | null>(null);
+  const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const flush = useCallback(
+    async (keepalive = false): Promise<boolean> => {
+      if (saveTimer.current) clearTimeout(saveTimer.current);
+      saveTimer.current = null;
+      const d = pendingDoc.current;
+      if (!d) return true;
+      pendingDoc.current = null;
+      const init = jsonInit("PATCH", { settings: { kind: "compositor", compositor: d } });
+      if (keepalive) {
+        fetch(`/api/projects/${project.id}`, { ...init, keepalive: true }).catch(() => {});
+        return true;
+      }
+      setSaveState("saving");
+      try {
+        await fetchJson(`/api/projects/${project.id}`, init);
+        setSaveState(pendingDoc.current ? "dirty" : "saved");
+        return true;
+      } catch {
+        pendingDoc.current ??= d; // keep it queued for retry
+        setSaveState("error");
+        return false;
+      }
+    },
+    [project.id]
+  );
+
   useEffect(() => {
     if (firstRender.current) {
       firstRender.current = false;
       return;
     }
-    const t = setTimeout(() => {
-      fetch(`/api/projects/${project.id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ settings: { kind: "compositor", compositor: doc } }),
-      });
-    }, 400);
-    return () => clearTimeout(t);
-  }, [doc, project.id]);
+    pendingDoc.current = doc;
+    setSaveState("dirty");
+    if (saveTimer.current) clearTimeout(saveTimer.current);
+    saveTimer.current = setTimeout(() => flush(), 400);
+  }, [doc, flush]);
 
-  // ---- keyboard: undo / redo ----
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      const meta = e.metaKey || e.ctrlKey;
-      if (!meta || e.key.toLowerCase() !== "z") return;
-      const t = e.target as HTMLElement | null;
-      // let inputs/textareas keep native text undo
-      if (t && /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName)) return;
-      e.preventDefault();
-      if (e.shiftKey) redo();
-      else undo();
+    const onHide = () => flush(true);
+    window.addEventListener("pagehide", onHide);
+    return () => {
+      window.removeEventListener("pagehide", onHide);
+      flush(true);
     };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [undo, redo]);
+  }, [flush]);
 
   // ---- measure stage for scaling ----
   useEffect(() => {
@@ -271,6 +321,89 @@ export function CompositorEditor({ project }: { project: ProjectShape }) {
 
   const nextZ = () => (layers.length ? Math.max(...layers.map((l) => l.z)) + 1 : 0);
 
+  function duplicateLayer(l: Layer) {
+    addLayer({
+      ...l,
+      id: newId(l.type),
+      name: l.name ? `${l.name} copy` : undefined,
+      x: l.x + 20,
+      y: l.y + 20,
+      z: nextZ(),
+    } as Layer);
+  }
+
+  // Switching presets rescales existing layers into the new frame so
+  // full-frame media doesn't end up stranded off-canvas (undoable).
+  function applyPreset(width: number, height: number) {
+    setDoc((d) => {
+      const sx = width / d.output.width;
+      const sy = height / d.output.height;
+      return {
+        ...d,
+        output: { ...d.output, width, height },
+        layers: d.layers.map((l) => {
+          if (l.type === "audio") return l;
+          const scaled = {
+            ...l,
+            x: Math.round(l.x * sx),
+            y: Math.round(l.y * sy),
+            width: Math.round(l.width * sx),
+            height: Math.round(l.height * sy),
+          };
+          return l.type === "text"
+            ? { ...scaled, fontSize: Math.max(4, Math.round(l.fontSize * Math.min(sx, sy))) }
+            : scaled;
+        }) as Layer[],
+      };
+    });
+  }
+
+  // ---- keyboard ----
+  // ⌘Z / ⇧⌘Z undo·redo, Delete/Backspace remove, arrows nudge (⇧ = 10px),
+  // ⌘D duplicate, [ / ] send back·bring forward, Esc deselect. Skipped while
+  // typing so inputs keep their native behavior.
+  const onKeyRef = useRef<(e: KeyboardEvent) => void>(() => {});
+  onKeyRef.current = (e: KeyboardEvent) => {
+    const t = e.target as HTMLElement | null;
+    const typing = !!t && (/^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName) || t.isContentEditable);
+    if (typing) return;
+    const meta = e.metaKey || e.ctrlKey;
+    const key = e.key.toLowerCase();
+    if (meta && key === "z") {
+      e.preventDefault();
+      if (e.shiftKey) redo();
+      else undo();
+      return;
+    }
+    if (e.key === "Escape") {
+      setSelectedId(null);
+      return;
+    }
+    if (!selected) return;
+    if (e.key === "Delete" || e.key === "Backspace") {
+      e.preventDefault();
+      removeLayer(selected.id);
+    } else if (meta && key === "d") {
+      e.preventDefault();
+      duplicateLayer(selected);
+    } else if (e.key === "[") {
+      reorder(selected.id, -1);
+    } else if (e.key === "]") {
+      reorder(selected.id, 1);
+    } else if (e.key.startsWith("Arrow") && selected.type !== "audio") {
+      e.preventDefault();
+      const step = e.shiftKey ? 10 : 1;
+      const dx = e.key === "ArrowLeft" ? -step : e.key === "ArrowRight" ? step : 0;
+      const dy = e.key === "ArrowUp" ? -step : e.key === "ArrowDown" ? step : 0;
+      patchLayer(selected.id, { x: selected.x + dx, y: selected.y + dy });
+    }
+  };
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => onKeyRef.current(e);
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
   // ---- adding layers ----
   function addText() {
     addLayer({
@@ -299,9 +432,10 @@ export function CompositorEditor({ project }: { project: ProjectShape }) {
     });
   }
 
-  function addMediaLayer(kind: "video" | "image" | "audio", assetHash: string) {
+  function addMediaLayer(kind: "video" | "image" | "audio", assetHash: string, name?: string) {
     const common = {
       id: newId(kind),
+      name,
       rotation: 0,
       opacity: 1,
       z: nextZ(),
@@ -347,13 +481,13 @@ export function CompositorEditor({ project }: { project: ProjectShape }) {
     const fd = new FormData();
     fd.append("file", file);
     fd.append("kind", "compositor");
-    const r = await fetch("/api/assets", { method: "POST", body: fd });
-    const d = await r.json();
-    if (!r.ok) {
-      setError(d.error ?? "Upload failed");
+    try {
+      const d = await fetchJson<{ asset: { hash: string } }>("/api/assets", { method: "POST", body: fd });
+      return d.asset.hash;
+    } catch (e) {
+      setError(`Couldn't upload ${file.name} — ${(e as Error).message}`);
       return null;
     }
-    return d.asset.hash as string;
   }
 
   function kindFromMime(mime: string): "video" | "image" | "audio" | null {
@@ -365,16 +499,20 @@ export function CompositorEditor({ project }: { project: ProjectShape }) {
 
   async function ingestFiles(files: FileList | File[]) {
     setError(null);
-    setUploading(true);
+    const all = Array.from(files);
+    const usable = all.filter((f) => kindFromMime(f.type));
+    const skipped = all.filter((f) => !kindFromMime(f.type)).map((f) => f.name);
     try {
-      for (const file of Array.from(files)) {
-        const kind = kindFromMime(file.type);
-        if (!kind) continue;
+      for (const [i, file] of usable.entries()) {
+        setUploading({ i: i + 1, n: usable.length, name: file.name });
         const hash = await uploadFile(file);
-        if (hash) addMediaLayer(kind, hash);
+        if (hash) addMediaLayer(kindFromMime(file.type)!, hash, file.name.replace(/\.[^.]+$/, ""));
       }
     } finally {
-      setUploading(false);
+      setUploading(null);
+    }
+    if (skipped.length) {
+      setError(`Skipped ${skipped.join(", ")} — only video, image, and audio files can be added.`);
     }
   }
 
@@ -462,20 +600,31 @@ export function CompositorEditor({ project }: { project: ProjectShape }) {
   }
 
   // ---- export ----
+  useEffect(() => {
+    if (!rendering) return;
+    const started = Date.now();
+    setRenderElapsed(0);
+    const t = setInterval(() => setRenderElapsed(Math.floor((Date.now() - started) / 1000)), 1000);
+    return () => clearInterval(t);
+  }, [rendering]);
+
   async function exportVideo() {
     setError(null);
     setRendering(true);
     try {
-      const r = await fetch(`/api/projects/${project.id}/render`, { method: "POST" });
-      const d = await r.json();
-      if (!r.ok || d.status === "error") throw new Error(d.error ?? "Render failed");
+      // Render reads the saved doc, so make sure the latest edit is saved first.
+      if (!(await flush())) throw new Error("Couldn't save your latest changes, so export was stopped");
+      const exported = doc;
+      const d = await fetchJson<{ url: string }>(`/api/projects/${project.id}/render`, { method: "POST" });
       setRenderUrl(d.url);
+      setRenderedDoc(exported);
     } catch (e) {
       setError((e as Error).message);
     } finally {
       setRendering(false);
     }
   }
+  const renderStale = !!renderUrl && renderedDoc !== doc;
 
   const sortedLayers = [...layers].sort((a, b) => b.z - a.z); // top layer first in the list
   const durationSec = output.durationInFrames / output.fps;
@@ -488,6 +637,7 @@ export function CompositorEditor({ project }: { project: ProjectShape }) {
   return (
     <div className="flex h-full flex-col">
       <FontLoader families={[...FONT_CHOICES, ...textFamilies]} />
+      <NarrowScreenNote />
       <input
         ref={fileInputRef}
         type="file"
@@ -506,13 +656,29 @@ export function CompositorEditor({ project }: { project: ProjectShape }) {
           <ArrowLeft size={13} /> All projects
         </Link>
         <span className="h-3.5 w-px bg-line" />
-        <h1 className="truncate font-serif text-[16px] italic tracking-tight">{project.title}</h1>
+        <EditableTitle
+          value={title}
+          onSave={async (next) => {
+            setTitle(next);
+            await fetchJson(`/api/projects/${project.id}`, jsonInit("PATCH", { title: next })).catch(() =>
+              setError("Couldn't rename the project")
+            );
+          }}
+        />
         <span className="micro text-lime">compositor</span>
+        <SaveStatus
+          state={saveState}
+          onRetry={() => {
+            pendingDoc.current ??= doc;
+            flush();
+          }}
+        />
         <div className="ml-1 flex items-center gap-0.5">
           <button
             onClick={undo}
             disabled={!canUndo}
             title="Undo (⌘Z)"
+            aria-label="Undo"
             className="flex h-7 w-7 items-center justify-center rounded-md text-ink-dim transition-colors hover:bg-line hover:text-ink disabled:pointer-events-none disabled:opacity-30"
           >
             <Undo2 size={14} />
@@ -521,25 +687,43 @@ export function CompositorEditor({ project }: { project: ProjectShape }) {
             onClick={redo}
             disabled={!canRedo}
             title="Redo (⇧⌘Z)"
+            aria-label="Redo"
             className="flex h-7 w-7 items-center justify-center rounded-md text-ink-dim transition-colors hover:bg-line hover:text-ink disabled:pointer-events-none disabled:opacity-30"
           >
             <Redo2 size={14} />
           </button>
         </div>
         <div className="flex-1" />
-        {error && <span className="text-[12px] text-danger">{error.slice(0, 90)}</span>}
+        {error && (
+          <InlineError onDismiss={() => setError(null)} className="max-w-[360px]">
+            {error}
+          </InlineError>
+        )}
         {renderUrl && !rendering && (
           <a
             href={renderUrl}
-            download={`${project.title || "loso"}.mp4`}
-            className="flex items-center gap-1.5 text-[12.5px] text-ink-dim transition-colors hover:text-lime"
+            download={`${safeFileName(title)}.mp4`}
+            title={renderStale ? "This export predates your latest edits" : undefined}
+            className={cx(
+              "flex items-center gap-1.5 text-[12.5px] transition-colors hover:text-lime",
+              renderStale ? "text-ink-faint" : "text-ink-dim"
+            )}
           >
-            <Download size={13} /> Download MP4
+            <Download size={13} /> {renderStale ? "Download previous export" : "Download MP4"}
           </a>
         )}
-        <Button size="sm" onClick={exportVideo} disabled={rendering || layers.length === 0}>
+        <Button
+          size="sm"
+          onClick={exportVideo}
+          disabled={rendering || layers.length === 0}
+          title={layers.length === 0 ? "Add a layer to export" : undefined}
+        >
           {rendering ? <Loader2 size={13} className="animate-spin" /> : <Download size={13} />}
-          {rendering ? "Rendering…" : "Export video"}
+          {rendering
+            ? `Rendering… ${renderElapsed}s`
+            : renderUrl && renderStale
+              ? "Re-export"
+              : "Export video"}
         </Button>
       </div>
 
@@ -553,7 +737,7 @@ export function CompositorEditor({ project }: { project: ProjectShape }) {
               value={activePreset?.id ?? "custom"}
               onChange={(e) => {
                 const p = OUTPUT_PRESETS.find((x) => x.id === e.target.value);
-                if (p) setOutput({ width: p.width, height: p.height });
+                if (p) applyPreset(p.width, p.height);
               }}
             >
               {OUTPUT_PRESETS.map((p) => (
@@ -563,6 +747,9 @@ export function CompositorEditor({ project }: { project: ProjectShape }) {
               ))}
               {!activePreset && <option value="custom">Custom · {output.width}×{output.height}</option>}
             </Select>
+            {layers.length > 0 && (
+              <p className="-mt-1 text-[11px] text-ink-faint">Presets rescale your layers to fit.</p>
+            )}
             <div className="grid grid-cols-2 gap-3">
               <NumRow label="Width" value={output.width} min={16} onChange={(v) => setOutput({ width: Math.max(16, v) })} />
               <NumRow label="Height" value={output.height} min={16} onChange={(v) => setOutput({ height: Math.max(16, v) })} />
@@ -596,8 +783,12 @@ export function CompositorEditor({ project }: { project: ProjectShape }) {
               <TrayButton icon={TypeIcon} label="Text" onClick={addText} />
             </div>
             {uploading && (
-              <span className="micro flex items-center gap-2 text-lime">
-                <Loader2 size={11} className="animate-spin" /> Uploading…
+              <span className="micro flex min-w-0 items-center gap-2 text-lime" aria-live="polite">
+                <Loader2 size={11} className="shrink-0 animate-spin" />
+                <span className="truncate">
+                  Uploading {uploading.n > 1 ? `${uploading.i}/${uploading.n} — ` : ""}
+                  {uploading.name}
+                </span>
               </span>
             )}
           </div>
@@ -612,48 +803,90 @@ export function CompositorEditor({ project }: { project: ProjectShape }) {
             )}
             {sortedLayers.map((l) => {
               const Icon = TYPE_ICON[l.type];
+              const isSel = selectedId === l.id;
+              const label = layerLabel(l);
               return (
                 <div
                   key={l.id}
+                  role="button"
+                  tabIndex={0}
+                  aria-pressed={isSel}
+                  aria-label={`${l.type} layer: ${label}`}
                   onClick={() => setSelectedId(l.id)}
+                  onDoubleClick={() => setRenamingId(l.id)}
+                  onKeyDown={(e) => {
+                    if (e.target !== e.currentTarget) return;
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      setSelectedId(l.id);
+                    }
+                  }}
                   className={cx(
-                    "group flex cursor-pointer items-center gap-2 rounded-md border px-2.5 py-1.5 text-[12.5px] transition-colors",
-                    selectedId === l.id
+                    "group flex cursor-pointer items-center gap-2 rounded-md border py-1 pl-2.5 pr-1 text-[12.5px] transition-colors",
+                    isSel
                       ? "border-lime/60 bg-lime/5 text-ink"
                       : "border-line text-ink-dim hover:border-line-strong"
                   )}
                 >
                   <Icon size={13} className="shrink-0" />
-                  <span className="min-w-0 flex-1 truncate">
-                    {l.type === "text" ? l.text || "Text" : l.type}
-                  </span>
-                  <div className="flex items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">
+                  {renamingId === l.id ? (
+                    <input
+                      autoFocus
+                      defaultValue={label}
+                      aria-label="Layer name"
+                      onClick={(e) => e.stopPropagation()}
+                      onBlur={(e) => {
+                        const name = e.target.value.trim();
+                        if (name && name !== label) patchLayer(l.id, { name });
+                        setRenamingId(null);
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") e.currentTarget.blur();
+                        if (e.key === "Escape") setRenamingId(null);
+                      }}
+                      className="uline min-w-0 flex-1 !py-0 text-[12.5px]"
+                    />
+                  ) : (
+                    <span className="min-w-0 flex-1 truncate" title="Double-click to rename">
+                      {label}
+                    </span>
+                  )}
+                  <div
+                    className={cx(
+                      "flex items-center transition-opacity group-hover:opacity-100 group-focus-within:opacity-100",
+                      isSel ? "opacity-100" : "opacity-0"
+                    )}
+                  >
                     <button
-                      className="p-0.5 text-ink-faint hover:text-ink"
+                      className="flex h-6 w-6 items-center justify-center rounded text-ink-faint hover:text-ink"
                       onClick={(e) => {
                         e.stopPropagation();
                         reorder(l.id, 1);
                       }}
-                      title="Bring forward"
+                      title="Bring forward ( ] )"
+                      aria-label={`Bring ${label} forward`}
                     >
-                      ↑
+                      <ChevronUp size={13} />
                     </button>
                     <button
-                      className="p-0.5 text-ink-faint hover:text-ink"
+                      className="flex h-6 w-6 items-center justify-center rounded text-ink-faint hover:text-ink"
                       onClick={(e) => {
                         e.stopPropagation();
                         reorder(l.id, -1);
                       }}
-                      title="Send back"
+                      title="Send back ( [ )"
+                      aria-label={`Send ${label} back`}
                     >
-                      ↓
+                      <ChevronDown size={13} />
                     </button>
                     <button
-                      className="p-0.5 text-ink-faint hover:text-danger"
+                      className="flex h-6 w-6 items-center justify-center rounded text-ink-faint hover:text-danger"
                       onClick={(e) => {
                         e.stopPropagation();
                         removeLayer(l.id);
                       }}
+                      title="Delete layer (⌫)"
+                      aria-label={`Delete ${label}`}
                     >
                       <Trash2 size={12} />
                     </button>
@@ -669,13 +902,29 @@ export function CompositorEditor({ project }: { project: ProjectShape }) {
           <div
             ref={stageRef}
             className="relative flex flex-1 items-center justify-center overflow-hidden p-8"
+            onDragEnter={(e) => {
+              if (!e.dataTransfer.types.includes("Files")) return;
+              dragDepth.current += 1;
+              setDragOver(true);
+            }}
+            onDragLeave={() => {
+              dragDepth.current = Math.max(0, dragDepth.current - 1);
+              if (dragDepth.current === 0) setDragOver(false);
+            }}
             onDragOver={(e) => e.preventDefault()}
             onDrop={(e) => {
               e.preventDefault();
+              dragDepth.current = 0;
+              setDragOver(false);
               if (e.dataTransfer.files?.length) ingestFiles(e.dataTransfer.files);
             }}
             onPointerDown={() => setSelectedId(null)}
           >
+            {dragOver && (
+              <div className="pointer-events-none absolute inset-3 z-30 flex items-center justify-center border-2 border-dashed border-lime/70 bg-lime/5">
+                <span className="font-serif text-[22px] italic text-lime">Drop to add</span>
+              </div>
+            )}
             {dispW > 0 && (
               <div
                 className="relative shadow-[0_30px_90px_-30px_rgba(0,0,0,0.9)]"
@@ -709,18 +958,21 @@ export function CompositorEditor({ project }: { project: ProjectShape }) {
                     onPointerDown={beginMove}
                   >
                     {(["nw", "ne", "sw", "se"] as const).map((c) => (
+                      // 20px transparent hit area around a 10px visual dot
                       <span
                         key={c}
                         onPointerDown={(e) => beginResize(e, c)}
-                        className="absolute h-2.5 w-2.5 rounded-full border border-black bg-lime"
+                        className="absolute flex h-5 w-5 items-center justify-center"
                         style={{
-                          left: c.includes("w") ? -5 : undefined,
-                          right: c.includes("e") ? -5 : undefined,
-                          top: c.includes("n") ? -5 : undefined,
-                          bottom: c.includes("s") ? -5 : undefined,
+                          left: c.includes("w") ? -10 : undefined,
+                          right: c.includes("e") ? -10 : undefined,
+                          top: c.includes("n") ? -10 : undefined,
+                          bottom: c.includes("s") ? -10 : undefined,
                           cursor: c === "nw" || c === "se" ? "nwse-resize" : "nesw-resize",
                         }}
-                      />
+                      >
+                        <span className="h-2.5 w-2.5 rounded-full border border-black bg-lime" />
+                      </span>
                     ))}
                   </div>
                 )}
@@ -742,22 +994,26 @@ export function CompositorEditor({ project }: { project: ProjectShape }) {
                 const left = (l.from / total) * 100;
                 const w = (Math.min(l.durationInFrames, total - l.from) / total) * 100;
                 const Icon = TYPE_ICON[l.type];
+                const label = layerLabel(l);
                 return (
-                  <div
+                  <button
+                    type="button"
                     key={l.id}
-                    className="relative h-4 cursor-pointer rounded bg-line/50"
+                    aria-label={`Select ${label}`}
+                    className="relative block h-5 w-full cursor-pointer rounded bg-line/50"
                     onClick={() => setSelectedId(l.id)}
                   >
-                    <div
+                    <span
                       className={cx(
-                        "absolute top-0 flex h-full items-center gap-1 rounded px-1.5 text-[10px]",
+                        "absolute top-0 flex h-full min-w-0 items-center gap-1 overflow-hidden rounded px-1.5 text-[10px]",
                         selectedId === l.id ? "bg-lime text-black" : "bg-line-strong text-ink-dim"
                       )}
                       style={{ left: `${left}%`, width: `${Math.max(2, w)}%` }}
                     >
-                      <Icon size={9} />
-                    </div>
-                  </div>
+                      <Icon size={9} className="shrink-0" />
+                      <span className="truncate">{label}</span>
+                    </span>
+                  </button>
                 );
               })}
             </div>
@@ -767,12 +1023,32 @@ export function CompositorEditor({ project }: { project: ProjectShape }) {
         {/* inspector */}
         <div className="w-[280px] shrink-0 overflow-y-auto border-l border-line p-5">
           {!selected ? (
-            <p className="text-[12.5px] leading-relaxed text-ink-faint">
-              Select a layer to edit its position, timing, and style.
-            </p>
+            <div className="flex flex-col gap-4">
+              <p className="text-[12.5px] leading-relaxed text-ink-faint">
+                Select a layer to edit its position, timing, and style.
+              </p>
+              <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1.5 border-t border-line pt-4 text-[11.5px]">
+                <span className="micro col-span-2 mb-1">Shortcuts</span>
+                {[
+                  ["← ↑ → ↓", "Nudge 1px (⇧ 10px)"],
+                  ["⌫", "Delete layer"],
+                  ["⌘D", "Duplicate"],
+                  ["[  ]", "Send back / forward"],
+                  ["⌘Z  ⇧⌘Z", "Undo / redo"],
+                  ["Esc", "Deselect"],
+                ].map(([k, v]) => (
+                  <div key={k} className="contents">
+                    <dt className="font-mono text-ink-dim">{k}</dt>
+                    <dd className="text-ink-faint">{v}</dd>
+                  </div>
+                ))}
+              </dl>
+            </div>
           ) : (
             <div className="flex flex-col gap-5">
-              <span className="micro text-lime">{selected.type} layer</span>
+              <span className="micro truncate text-lime">
+                {selected.type} layer{selected.name ? ` · ${selected.name}` : ""}
+              </span>
 
               {selected.type === "text" && (
                 <div className="flex flex-col gap-3">
@@ -781,7 +1057,7 @@ export function CompositorEditor({ project }: { project: ProjectShape }) {
                       rows={3}
                       value={selected.text}
                       onChange={(e) => patchLayer(selected.id, { text: e.target.value })}
-                      className="w-full resize-none rounded-lg border border-line bg-panel/60 px-3 py-2 text-sm text-ink outline-none focus:border-line-strong"
+                      className="w-full resize-none rounded-lg border border-line bg-panel/60 px-3 py-2 text-sm text-ink outline-none focus:border-lime/60"
                     />
                   </Field>
                   <Field label="Font">
@@ -822,6 +1098,8 @@ export function CompositorEditor({ project }: { project: ProjectShape }) {
                     <button
                       onClick={() => patchLayer(selected.id, { italic: !selected.italic })}
                       title="Italic"
+                      aria-label="Italic"
+                      aria-pressed={selected.italic}
                       className={cx(
                         "flex h-7 w-7 items-center justify-center rounded-md border italic transition-colors",
                         selected.italic
@@ -1067,7 +1345,8 @@ function AlignBtn({
   return (
     <button
       onClick={onClick}
-      title={title}
+      title={`Align ${title.toLowerCase()}`}
+      aria-label={`Align ${title.toLowerCase()}`}
       className="flex h-7 w-7 items-center justify-center rounded-md border border-line text-ink-dim transition-colors hover:border-lime hover:text-lime"
     >
       <Icon size={14} />

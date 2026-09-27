@@ -1,6 +1,7 @@
 "use client";
 
-import { useState } from "react";
+import { Suspense, useCallback, useEffect, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { KeysPanel } from "@/components/settings/keys-panel";
 import { BrandPanel } from "@/components/settings/brand-panel";
 import { cx } from "@/components/ui";
@@ -12,8 +13,32 @@ const TABS = [
 
 type TabId = (typeof TABS)[number]["id"];
 
+// useSearchParams needs a Suspense boundary under the App Router.
 export default function SettingsPage() {
-  const [tab, setTab] = useState<TabId>("keys");
+  return (
+    <Suspense>
+      <SettingsInner />
+    </Suspense>
+  );
+}
+
+function SettingsInner() {
+  const router = useRouter();
+  const params = useSearchParams();
+  const tab: TabId = params.get("tab") === "brand" ? "brand" : "keys";
+  const setTab = (t: TabId) => router.replace(t === "keys" ? "/settings" : `/settings?tab=${t}`, { scroll: false });
+
+  // Warn before leaving with unsaved brand edits or pasted-but-unsaved keys.
+  const [dirty, setDirty] = useState({ keys: false, brand: false });
+  const onKeysDirty = useCallback((v: boolean) => setDirty((d) => ({ ...d, keys: v })), []);
+  const onBrandDirty = useCallback((v: boolean) => setDirty((d) => ({ ...d, brand: v })), []);
+  const anyDirty = dirty.keys || dirty.brand;
+  useEffect(() => {
+    if (!anyDirty) return;
+    const warn = (e: BeforeUnloadEvent) => e.preventDefault();
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [anyDirty]);
 
   return (
     <div className="mx-auto max-w-4xl px-8 pb-36">
@@ -25,10 +50,12 @@ export default function SettingsPage() {
         >
           Settings
         </h1>
-        <div className="rise mt-7 flex gap-7" style={{ animationDelay: "120ms" }}>
+        <div className="rise mt-7 flex gap-7" role="tablist" style={{ animationDelay: "120ms" }}>
           {TABS.map((t) => (
             <button
               key={t.id}
+              role="tab"
+              aria-selected={tab === t.id}
               onClick={() => setTab(t.id)}
               className={cx(
                 "relative pb-2 text-[13.5px] transition-colors",
@@ -36,13 +63,24 @@ export default function SettingsPage() {
               )}
             >
               {t.label}
+              {dirty[t.id] && tab !== t.id && (
+                <span className="ml-1.5 inline-block h-1.5 w-1.5 -translate-y-0.5 rounded-full bg-lime" title="Unsaved changes" />
+              )}
               {tab === t.id && <span className="absolute inset-x-0 -bottom-px h-px bg-lime" />}
             </button>
           ))}
         </div>
       </header>
 
-      <div className="pt-2">{tab === "keys" ? <KeysPanel /> : <BrandPanel />}</div>
+      {/* Both panels stay mounted so switching tabs never drops unsaved edits. */}
+      <div className="pt-2">
+        <div hidden={tab !== "keys"}>
+          <KeysPanel onDirtyChange={onKeysDirty} />
+        </div>
+        <div hidden={tab !== "brand"}>
+          <BrandPanel onDirtyChange={onBrandDirty} />
+        </div>
+      </div>
     </div>
   );
 }
