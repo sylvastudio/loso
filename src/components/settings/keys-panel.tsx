@@ -58,9 +58,10 @@ export function KeysPanel({ onDirtyChange }: { onDirtyChange?: (dirty: boolean) 
   return (
     <div>
       <p className="max-w-lg pt-6 text-[13px] leading-relaxed text-ink-dim">
-        Bring your own keys. They live server-side in the local database — never in the browser,
-        never in a rendered video. Missing keys switch their stage off gracefully; the rest of the
-        studio keeps working.
+        Keys for the video pipeline — voice, transcription, stock images. They live server-side in the local
+        database, never in the browser or a rendered video. The studio agent&rsquo;s model is set up under{" "}
+        <a href="/settings?tab=ai" className="text-lime underline-offset-2 hover:underline">AI model</a>; a Groq or
+        Anthropic key saved here is shared with it.
       </p>
 
       <div className="mt-4">

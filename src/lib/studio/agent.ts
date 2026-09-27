@@ -2,12 +2,13 @@ import "server-only";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import { chat, getAiConfig, NO_MODEL_MESSAGE } from "../ai";
+import { ProviderError } from "../ai/http";
 import type { ChatMessage, ContentPart, ImagePart, ToolCall, ToolDef } from "../ai/types";
 import { storeAsset, assetPath } from "../assets";
 import { getAsset, getProject } from "../repo";
 import type { CompositorDoc } from "../compositor";
 import { appendAgentMessage, listAgentMessages } from "./store";
-import { describeDoc, getTool, runTool, toolInfos, type ToolOutput } from "./tools";
+import { getTool, runTool, toolInfos, type ToolOutput } from "./tools";
 import { allTemplates } from "./templates";
 import { compositorDocSchema } from "../compositor";
 
@@ -24,7 +25,49 @@ export type AgentEvent =
   | { type: "doc"; doc: CompositorDoc; turn: string }
   | { type: "waiting"; id: string; name: string; args: Record<string, unknown> }
   | { type: "done" }
-  | { type: "error"; message: string };
+  | { type: "error"; message: string; code?: AgentErrorCode; retryAfterSec?: number };
+
+export type AgentErrorCode = "no_model" | "auth" | "rate_limit" | "context" | "no_tools" | "connection" | "other";
+
+function classify(e: unknown): { code: AgentErrorCode; retryAfterSec?: number } {
+  const msg = (e as Error)?.message ?? "";
+  const status = e instanceof ProviderError ? e.status : 0;
+  const wait = msg.match(/try again in\s+([\d.]+)\s*(ms|s|m)\b/i);
+  const retryAfterSec = wait
+    ? Math.ceil(Number(wait[1]) * (wait[2] === "ms" ? 0.001 : wait[2] === "m" ? 60 : 1))
+    : undefined;
+  if (msg === NO_MODEL_MESSAGE || /no api key saved|no base url/i.test(msg)) return { code: "no_model" };
+  if (status === 401 || status === 403 || /invalid.*api key|incorrect api key|unauthori[sz]ed/i.test(msg)) return { code: "auth" };
+  if (status === 429 || /rate limit|too many requests/i.test(msg)) {
+    // Groq reports per-request token overflow as 413/429 "Request too large"
+    if (/request too large|reduce your message size/i.test(msg)) return { code: "context" };
+    return { code: "rate_limit", retryAfterSec };
+  }
+  if (status === 413 || /context|too long|maximum.*tokens|request too large|reduce the length/i.test(msg)) return { code: "context" };
+  if (/tool(s)? (use|call)|does not support tools|function calling/i.test(msg)) return { code: "no_tools" };
+  if (status === 0 && /couldn't connect|couldn't resolve|network error|no response/i.test(msg)) return { code: "connection" };
+  return { code: "other" };
+}
+
+/**
+ * chat() that rides out per-minute rate limits: up to 3 retries, waiting what
+ * the provider asks for (plus a margin), at most ~90s in total.
+ */
+async function chatWithRetry(req: Parameters<typeof chat>[0], emit: (e: AgentEvent) => void) {
+  let waited = 0;
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await chat(req);
+    } catch (e) {
+      const c = classify(e);
+      if (c.code !== "rate_limit" || req.signal?.aborted || attempt >= 3 || waited >= 90) throw e;
+      const wait = Math.min(45, Math.max(3, Math.ceil((c.retryAfterSec ?? 10) + 2 + attempt * 5)));
+      waited += wait;
+      emit({ type: "text", text: `(Rate limit — waiting ${wait}s, then continuing…)` });
+      await new Promise((r) => setTimeout(r, wait * 1000));
+    }
+  }
+}
 
 export type AgentInput =
   | { kind: "message"; text: string; images?: Array<{ mime: string; data: string }> }
@@ -122,8 +165,23 @@ Be concise in chat: say what you did and what you need. Never invent footage con
 TEMPLATES
 ${templates || "(none yet)"}
 
-CURRENT COMPOSITION
-${describeDoc(doc).slice(0, 6000)}`;
+CURRENT COMPOSITION (summary — call get_composition for every field)
+${summarizeDoc(doc)}`;
+}
+
+/** One line per layer — keeps every model step small (full detail: get_composition). */
+function summarizeDoc(doc: CompositorDoc): string {
+  const { width, height, fps, durationInFrames } = doc.output;
+  const sec = (f: number) => Math.round((f / fps) * 10) / 10;
+  const lines = [...doc.layers]
+    .sort((a, b) => b.z - a.z)
+    .slice(0, 40)
+    .map((l) => {
+      const label = l.type === "text" ? JSON.stringify(l.text.slice(0, 40)) : l.name ? JSON.stringify(l.name) : "";
+      return `- ${l.id} ${l.type}${l.slot ? ` slot=${l.slot}` : ""} ${label} @${l.x},${l.y} ${l.width}×${l.height} z${l.z} ${sec(l.from)}–${sec(l.from + l.durationInFrames)}s`;
+    });
+  const more = doc.layers.length > 40 ? `\n…and ${doc.layers.length - 40} more` : "";
+  return `${width}×${height} @${fps}fps, ${sec(durationInFrames)}s, ${doc.layers.length} layers (top first)\n${lines.join("\n") || "(empty)"}${more}`;
 }
 
 function unresolved(stored: StoredChatMessage[]): { assistantIndex: number; calls: ToolCall[] } | null {
@@ -150,7 +208,7 @@ export async function runAgent(
   const { emit, signal, baseUrl } = opts;
   const cfg = getAiConfig();
   if (!cfg || !cfg.model) {
-    emit({ type: "error", message: NO_MODEL_MESSAGE });
+    emit({ type: "error", message: NO_MODEL_MESSAGE, code: "no_model" });
     return;
   }
   if (locks.has(projectId)) {
@@ -229,12 +287,10 @@ export async function runAgent(
     const tools: ToolDef[] = toolInfos({ includeInteractive: true }).map(({ name, description, parameters }) => ({ name, description, parameters }));
     for (let step = 0; step < MAX_STEPS; step++) {
       if (signal.aborted) return;
-      const res = await chat({
-        system: systemPrompt(projectId, cfg.vision),
-        messages: hydrate(history(), cfg.vision),
-        tools,
-        signal,
-      });
+      const res = await chatWithRetry(
+        { system: systemPrompt(projectId, cfg.vision), messages: hydrate(history(), cfg.vision), tools, signal },
+        emit
+      );
       save({ role: "assistant", content: res.text ? [{ type: "text", text: res.text }] : [], toolCalls: res.toolCalls.length ? res.toolCalls : undefined });
       if (res.text) emit({ type: "text", text: res.text });
       if (!res.toolCalls.length) break;
@@ -245,7 +301,7 @@ export async function runAgent(
       if (step === MAX_STEPS - 1) emit({ type: "text", text: "(Stopped after many steps — say “continue” to keep going.)" });
     }
   } catch (e) {
-    if (!signal.aborted) emit({ type: "error", message: (e as Error).message });
+    if (!signal.aborted) emit({ type: "error", message: (e as Error).message, ...classify(e) });
   } finally {
     locks.delete(projectId);
     emit({ type: "done" });

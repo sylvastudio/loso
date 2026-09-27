@@ -58,6 +58,16 @@ export function setAiKey(value: string | null) {
   else kvSet("ai.key", value.trim());
 }
 
+/** Last "Test model" result (JSON) — lets the UI tell "never tested" from "failed" from "ready". */
+export function getAiLastTestRaw(): string | null {
+  return kvGet("ai.lastTest");
+}
+
+export function setAiLastTestRaw(json: string | null) {
+  if (json === null) kvDelete("ai.lastTest");
+  else kvSet("ai.lastTest", json);
+}
+
 // ---------- pronunciation dictionary ----------
 
 export interface PronunciationEntry {

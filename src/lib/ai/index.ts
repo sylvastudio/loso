@@ -2,7 +2,16 @@
 // Server-only (touches the local database).
 import "server-only";
 
-import { getAiConfigRaw, getAiKey, setAiConfigRaw, setAiKey } from "@/lib/repo";
+import {
+  getAiConfigRaw,
+  getAiKey,
+  getAiLastTestRaw,
+  getApiKey,
+  setAiConfigRaw,
+  setAiKey,
+  setAiLastTestRaw,
+  setApiKey,
+} from "@/lib/repo";
 import { maskKey } from "@/lib/providers";
 import type { AiConfig, ChatAdapter, ChatRequest, ChatResponse, ProviderKind, ProviderPresetId } from "./types";
 import { PRESETS, getPreset, type ProviderPreset } from "./presets";
@@ -44,11 +53,24 @@ function readStored(): StoredConfig | null {
   }
 }
 
+// Providers that also have a row under Settings → API Keys share that one key:
+// one place to paste it, and switching the agent's model never deletes it.
+const SHARED_KEY_PRESETS = new Set<ProviderPresetId>(["groq", "anthropic"]);
+
+export function isSharedKeyPreset(id: ProviderPresetId): id is "groq" | "anthropic" {
+  return SHARED_KEY_PRESETS.has(id);
+}
+
+function keyFor(preset: ProviderPresetId): string | null {
+  if (isSharedKeyPreset(preset)) return getApiKey(preset) ?? getAiKey();
+  return getAiKey();
+}
+
 /** Full config incl. raw key (server-side only). Null when no preset is chosen. */
 export function getAiConfig(): AiConfig | null {
   const stored = readStored();
   if (!stored) return null;
-  return { ...stored, apiKey: getAiKey() };
+  return { ...stored, apiKey: keyFor(stored.preset) };
 }
 
 /** A config usable for chat: preset chosen, model set, key present if needed. */
@@ -74,6 +96,7 @@ export function saveAiConfig(patch: AiConfigPatch): AiConfig | null {
   if (patch.reset) {
     setAiConfigRaw(null);
     setAiKey(null);
+    setAiLastTestRaw(null);
     return null;
   }
   const current = readStored();
@@ -111,22 +134,78 @@ export function saveAiConfig(patch: AiConfigPatch): AiConfig | null {
   };
   if (!["provider", "local", "groq"].includes(next.transcription)) next.transcription = "provider";
   setAiConfigRaw(JSON.stringify(next));
-  // Keys are provider-specific: switching presets drops the old key unless a new one came along.
-  if (patch.apiKey !== undefined) setAiKey(patch.apiKey);
-  else if (switching) setAiKey(null);
+  // A new provider or model invalidates the last test result.
+  if (switching || (patch.model !== undefined && patch.model.trim() !== base.model)) setAiLastTestRaw(null);
+  if (isSharedKeyPreset(preset.id)) {
+    // Shared providers keep their key in Settings → API Keys (one source of truth).
+    if (patch.apiKey !== undefined) setApiKey(preset.id, patch.apiKey ?? "");
+    if (switching) setAiKey(null);
+  } else if (patch.apiKey !== undefined) {
+    setAiKey(patch.apiKey);
+  } else if (switching) {
+    // Agent-only keys are provider-specific: switching presets drops the old one.
+    setAiKey(null);
+  }
   return getAiConfig();
+}
+
+export interface LastTest {
+  model: string;
+  ok: boolean;
+  tools: boolean;
+  vision: boolean;
+  error?: string;
+  latencyMs: number;
+  at: number;
+}
+
+export function getLastTest(): LastTest | null {
+  const raw = getAiLastTestRaw();
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw) as LastTest;
+  } catch {
+    return null;
+  }
+}
+
+export function recordLastTest(t: Omit<LastTest, "at">) {
+  setAiLastTestRaw(JSON.stringify({ ...t, at: Date.now() }));
 }
 
 export interface PublicAiConfig extends Omit<AiConfig, "apiKey"> {
   hasKey: boolean;
   maskedKey: string | null;
+  /** "shared" = the key lives in Settings → API Keys (Groq, Anthropic). */
+  keySource: "shared" | "agent" | null;
+  needsKey: boolean;
+  /** Last test of the *current* model, if any. */
+  lastTest: LastTest | null;
 }
 
 export function publicAiConfig(): PublicAiConfig | null {
   const cfg = getAiConfig();
   if (!cfg) return null;
   const { apiKey, ...rest } = cfg;
-  return { ...rest, hasKey: !!apiKey, maskedKey: apiKey ? maskKey(apiKey) : null };
+  const preset = getPreset(cfg.preset)!;
+  const shared = isSharedKeyPreset(cfg.preset) && !!getApiKey(cfg.preset as "groq" | "anthropic");
+  const last = getLastTest();
+  return {
+    ...rest,
+    hasKey: !!apiKey,
+    maskedKey: apiKey ? maskKey(apiKey) : null,
+    keySource: apiKey ? (shared ? "shared" : "agent") : null,
+    needsKey: preset.needsKey,
+    lastTest: last && last.model === cfg.model ? last : null,
+  };
+}
+
+/** Which shared provider keys already exist (to offer them in the connect flow). */
+export function sharedKeysAvailable(): Array<{ preset: "groq" | "anthropic"; maskedKey: string }> {
+  return (["groq", "anthropic"] as const)
+    .map((p) => ({ preset: p, key: getApiKey(p) }))
+    .filter((x): x is { preset: "groq" | "anthropic"; key: string } => !!x.key)
+    .map((x) => ({ preset: x.preset, maskedKey: maskKey(x.key) }));
 }
 
 export async function chat(req: ChatRequest): Promise<ChatResponse> {
@@ -157,7 +236,7 @@ function mergeDraft(draft?: Partial<AiConfig>): AiConfig {
     kind: preset.kind,
     baseUrl: preset.editableBaseUrl ? (draft.baseUrl ?? (samePreset ? saved!.baseUrl : preset.baseUrl)) : preset.baseUrl,
     model: draft.model ?? (samePreset ? saved!.model : ""),
-    apiKey: draft.apiKey || (samePreset ? saved!.apiKey : null),
+    apiKey: draft.apiKey || (samePreset ? saved!.apiKey : keyFor(preset.id)),
     vision: samePreset ? saved!.vision : false,
     tools: samePreset ? saved!.tools : true,
     transcription: samePreset ? saved!.transcription : "provider",

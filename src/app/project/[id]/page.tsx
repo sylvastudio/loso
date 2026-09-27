@@ -325,11 +325,11 @@ function AiShortEditor({ id }: { id: string }) {
   // Why Generate is unavailable, in the order the user should fix things.
   // Groq is checked up front so we never spend ElevenLabs credits on a run
   // that will fail at transcription.
-  const blocker: { text: string; settings?: boolean } | null =
+  const blocker: { text: string; settings?: boolean; href?: string } | null =
     keys && !keys.elevenlabs
-      ? { text: "Add an ElevenLabs key", settings: true }
+      ? { text: "Add an ElevenLabs key", settings: true, href: "/settings?tab=keys" }
       : transcriber === "none"
-        ? { text: "Set up transcription for captions", settings: true }
+        ? { text: "Set up transcription for captions", settings: true, href: "/settings?tab=ai" }
         : voicesError && voicesError !== "missing_key"
           ? { text: "Voices couldn't load" }
           : !project.script.trim()
@@ -369,7 +369,7 @@ function AiShortEditor({ id }: { id: string }) {
             {error.startsWith("missing_key") ? (
               <>
                 Missing {error.split(":")[1]} key —{" "}
-                <Link href="/settings" className="underline">
+                <Link href={error.includes("transcription") ? "/settings?tab=ai" : "/settings?tab=keys"} className="underline">
                   add it in Settings
                 </Link>
               </>
@@ -381,7 +381,7 @@ function AiShortEditor({ id }: { id: string }) {
         {!busy && !error && blocker && (
           <span className="text-[12px] text-ink-dim">
             {blocker.settings ? (
-              <Link href="/settings" className="underline-offset-2 hover:text-lime hover:underline">
+              <Link href={blocker.href ?? "/settings"} className="underline-offset-2 hover:text-lime hover:underline">
                 {blocker.text} →
               </Link>
             ) : (
@@ -448,7 +448,7 @@ function AiShortEditor({ id }: { id: string }) {
               <Field label="Voice" className="flex-1">
                 {voicesError === "missing_key" ? (
                   <p className="pt-1 text-[12.5px] text-ink-faint">
-                    <Link href="/settings" className="text-lime underline-offset-2 hover:underline">
+                    <Link href="/settings?tab=keys" className="text-lime underline-offset-2 hover:underline">
                       Add your ElevenLabs key
                     </Link>{" "}
                     to load voices.

@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { PRESETS, publicAiConfig, saveAiConfig, type AiConfigPatch } from "@/lib/ai";
+import { PRESETS, publicAiConfig, saveAiConfig, sharedKeysAvailable, type AiConfigPatch } from "@/lib/ai";
 import { localWhisperAvailable, resolveTranscriptionEngine } from "@/lib/ai/transcribe";
 import { getApiKey } from "@/lib/repo";
 
@@ -10,6 +10,7 @@ function payload() {
   return {
     config: publicAiConfig(),
     presets: PRESETS,
+    sharedKeys: sharedKeysAvailable(),
     transcription: {
       ...resolveTranscriptionEngine(),
       localWhisper: localWhisperAvailable(),

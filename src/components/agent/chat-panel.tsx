@@ -1,7 +1,6 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import Link from "next/link";
 import {
   ArrowUp,
   Check,
@@ -16,6 +15,7 @@ import {
 import { Button, InlineError, cx } from "@/components/ui";
 import { fetchJson } from "@/lib/fetch-json";
 import type { CompositorDoc } from "@/lib/compositor";
+import { ConnectCard, explainFailure, type ConfigPayload } from "@/components/agent/connect-card";
 
 // ---------- stored message shapes (mirror lib/studio/agent.ts) ----------
 
@@ -36,13 +36,7 @@ type LiveEvent =
   | { type: "doc"; doc: CompositorDoc; turn: string }
   | { type: "waiting"; id: string; name: string; args: Record<string, unknown> }
   | { type: "done" }
-  | { type: "error"; message: string };
-
-interface ModelInfo {
-  preset: string;
-  model: string;
-  vision: boolean;
-}
+  | { type: "error"; message: string; code?: string; retryAfterSec?: number };
 
 const CONFIRM_TOOLS = new Set(["footage_cut", "render_video"]);
 const INTERACTIVE = new Set(["ask_user", "propose_storyboard"]);
@@ -343,10 +337,11 @@ function ToolRow({
 
 // ---------- panel ----------
 
-const STARTERS = [
-  "Make a 30-second short from the clips in ~/Downloads/Excerpt — sermon plus audience reactions. Ask me what you need first.",
-  "Design a poster-card template like the screenshot I'm attaching, with the video inside the card.",
-  "Look at the current composition and fix anything that overlaps or wraps badly.",
+const FOLDER_TOKEN = "[folder]";
+const STARTERS: Array<{ text: string; vision?: boolean }> = [
+  { text: `Make a 30-second short from the clips in ${FOLDER_TOKEN} — the talk plus audience reactions. Ask me what you need first.` },
+  { text: "Design a poster-card template like the screenshot I'm attaching, with the video inside the card.", vision: true },
+  { text: "Look at the current composition and fix anything that overlaps or wraps badly." },
 ];
 
 export function ChatPanel({
@@ -364,7 +359,13 @@ export function ChatPanel({
   canUndoTurn: (turn: string) => boolean;
   onUndoTurn: () => void;
 }) {
-  const [model, setModel] = useState<ModelInfo | null | undefined>(undefined);
+  const [payload, setPayload] = useState<ConfigPayload | undefined>(undefined);
+  const [configError, setConfigError] = useState<string | null>(null);
+  // Explicitly re-open the connect card (switch model, rejected key, …).
+  const [connect, setConnect] = useState<null | { notice?: string }>(null);
+  const [errorCode, setErrorCode] = useState<string | null>(null);
+  const [testing, setTesting] = useState(false);
+  const draftRef = useRef<HTMLTextAreaElement>(null);
   const [history, setHistory] = useState<Stored[]>([]);
   const [live, setLive] = useState<LiveEvent[]>([]);
   const [busy, setBusy] = useState(false);
@@ -382,12 +383,19 @@ export function ChatPanel({
     setLastTurn(d.messages.at(-1)?.turn ?? null);
   }, [projectId]);
 
+  const loadConfig = useCallback(async () => {
+    try {
+      setPayload(await fetchJson<ConfigPayload>("/api/ai/config"));
+      setConfigError(null);
+    } catch (e) {
+      setConfigError((e as Error).message);
+    }
+  }, []);
+
   useEffect(() => {
-    fetchJson<{ config: ModelInfo | null }>("/api/ai/config")
-      .then((d) => setModel(d.config && d.config.model ? d.config : null))
-      .catch(() => setModel(null));
+    loadConfig();
     loadHistory().catch((e: Error) => setError(e.message));
-  }, [loadHistory]);
+  }, [loadHistory, loadConfig]);
 
   useEffect(() => onBusyChange(busy), [busy, onBusyChange]);
 
@@ -401,6 +409,7 @@ export function ChatPanel({
   const send = useCallback(
     async (body: Record<string, unknown>) => {
       setError(null);
+      setErrorCode(null);
       if (!(await beforeSend())) {
         setError("Couldn't save your latest edits, so the agent wasn't started.");
         return;
@@ -436,7 +445,12 @@ export function ChatPanel({
             const ev = JSON.parse(line.slice(6)) as LiveEvent;
             if (ev.type === "doc") onDoc(ev.doc, ev.turn);
             else if (ev.type === "turn") setLastTurn(ev.turn);
-            else if (ev.type === "error") setError(ev.message);
+            else if (ev.type === "error") {
+              setError(ev.message);
+              setErrorCode(ev.code ?? null);
+              if (ev.code === "auth") setConnect({ notice: "The provider rejected your key — it may be revoked or mistyped." });
+              if (ev.code === "no_model") loadConfig();
+            }
             if (ev.type !== "doc") setLive((l) => [...l, ev]);
           }
         }
@@ -449,7 +463,7 @@ export function ChatPanel({
         setLive([]);
       }
     },
-    [projectId, onDoc, beforeSend, loadHistory]
+    [projectId, onDoc, beforeSend, loadHistory, loadConfig]
   );
 
   function submit() {
@@ -501,22 +515,73 @@ export function ChatPanel({
   const resume = (toolCallId: string, payload: Record<string, unknown>) =>
     send({ kind: "resume", toolCallId, ...payload });
 
-  if (model === undefined) {
-    return <p className="p-5 text-[12.5px] text-ink-faint">Loading…</p>;
-  }
-  if (model === null) {
+  if (configError) {
     return (
-      <div className="flex flex-col gap-3 p-5">
-        <p className="font-serif text-[19px] italic text-ink-dim">Bring your own model</p>
-        <p className="text-[12.5px] leading-relaxed text-ink-faint">
-          The studio agent runs on your AI — OpenAI, Grok, Claude, Gemini, Groq, OpenRouter, or a local model via
-          Ollama / LM Studio. Add one and it can survey footage, cut edits, design templates and build videos here.
-        </p>
-        <Link href="/settings?tab=ai" className="text-[13px] text-lime underline-offset-2 hover:underline">
-          Settings → AI model →
-        </Link>
+      <div className="flex flex-col gap-2 p-5">
+        <InlineError>{`Couldn't load the AI settings (${configError}).`}</InlineError>
+        <button type="button" onClick={loadConfig} className="self-start text-[12px] text-lime hover:underline">
+          Retry
+        </button>
       </div>
     );
+  }
+  if (payload === undefined) {
+    return <p className="p-5 text-[12.5px] text-ink-faint">Loading…</p>;
+  }
+
+  const cfg = payload.config;
+  const presetLabel = payload.presets.find((p) => p.id === cfg?.preset)?.label ?? "the provider";
+  const failedTest = cfg?.lastTest && (!cfg.lastTest.ok || !cfg.lastTest.tools) ? cfg.lastTest : null;
+  const notConnected = !cfg || !cfg.model || (cfg.needsKey && !cfg.hasKey);
+  if (notConnected || failedTest || connect) {
+    const notice =
+      connect?.notice ??
+      (failedTest
+        ? failedTest.ok
+          ? `${failedTest.model} answered but didn't call tools — the agent needs tool calling. Pick another model.`
+          : explainFailure(failedTest.error ?? "The model didn't answer", presetLabel, cfg?.baseUrl ?? "").text
+        : null);
+    return (
+      <div className="min-h-0 flex-1 overflow-y-auto">
+        <ConnectCard
+          key={`${cfg?.preset}-${cfg?.model}-${!!connect}`}
+          payload={payload}
+          notice={notice}
+          onCancel={connect && !notConnected && !failedTest ? () => setConnect(null) : undefined}
+          onConnected={async () => {
+            setConnect(null);
+            setError(null);
+            setErrorCode(null);
+            await loadConfig();
+          }}
+        />
+      </div>
+    );
+  }
+  const model = cfg!; // connected: preset + model (+ key) present, last test (if any) passed
+
+  async function runTest() {
+    setTesting(true);
+    try {
+      await fetchJson("/api/ai/test", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+    } catch {
+      /* the result is recorded server-side either way */
+    } finally {
+      setTesting(false);
+      loadConfig();
+    }
+  }
+
+  function applyStarter(text: string) {
+    setDraft(text);
+    // select the folder placeholder so typing replaces it
+    requestAnimationFrame(() => {
+      const ta = draftRef.current;
+      if (!ta) return;
+      ta.focus();
+      const i = text.indexOf(FOLDER_TOKEN);
+      if (i >= 0) ta.setSelectionRange(i, i + FOLDER_TOKEN.length);
+    });
   }
 
   const turnUndoable = !busy && !!lastTurn && canUndoTurn(lastTurn);
@@ -525,10 +590,23 @@ export function ChatPanel({
     <div className="flex h-full min-h-0 flex-col">
       <div className="flex items-center gap-2 border-b border-line px-4 py-2.5">
         <span className={cx("led", "on")} />
-        <Link href="/settings?tab=ai" className="min-w-0 flex-1 truncate font-mono text-[11px] text-ink-dim hover:text-lime" title="Change model">
+        <button
+          type="button"
+          onClick={() => setConnect({})}
+          disabled={busy}
+          className="min-w-0 flex-1 truncate text-left font-mono text-[11px] text-ink-dim hover:text-lime disabled:hover:text-ink-dim"
+          title="Switch model"
+        >
           {model.model}
-          {!model.vision && <span className="text-ink-faint"> · text-only</span>}
-        </Link>
+          {!model.vision && (
+            <span
+              className="text-ink-faint"
+              title="Can't see images: no reference screenshots, and it checks layouts from geometry instead of looking. Works from transcripts and layer data."
+            >
+              {" "}· text-only
+            </span>
+          )}
+        </button>
         {turnUndoable && (
           <button
             type="button"
@@ -556,6 +634,15 @@ export function ChatPanel({
         )}
       </div>
 
+      {!model.lastTest && (
+        <div className="flex items-center gap-2 border-b border-line bg-panel/60 px-4 py-2 text-[11.5px] text-ink-faint">
+          <span className="flex-1">Not tested yet — check it can call tools and see images.</span>
+          <button type="button" onClick={runTest} disabled={testing} className="flex items-center gap-1 text-lime hover:underline disabled:opacity-60">
+            {testing && <Loader2 size={11} className="animate-spin" />} Test (under 1¢)
+          </button>
+        </div>
+      )}
+
       <div ref={scrollRef} className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-4 py-4" aria-live="polite">
         {history.length === 0 && live.length === 0 && (
           <div className="flex flex-col gap-3">
@@ -564,16 +651,30 @@ export function ChatPanel({
               Point me at a footage folder, attach a reference image, or ask for changes to this canvas. I&rsquo;ll ask
               before big decisions and show a storyboard before cutting.
             </p>
-            {STARTERS.map((s) => (
+            {STARTERS.filter((s) => !s.vision || model.vision).map((s) => (
               <button
-                key={s}
+                key={s.text}
                 type="button"
-                onClick={() => setDraft(s)}
+                onClick={() => applyStarter(s.text)}
                 className="rounded-md border border-line px-3 py-2 text-left text-[12px] leading-snug text-ink-dim transition-colors hover:border-lime/60 hover:text-ink"
               >
-                {s}
+                {s.text}
               </button>
             ))}
+            <p className="text-[11px] leading-relaxed text-ink-faint">
+              Folders: an absolute path or <code className="font-mono">~/…</code> on this computer. Footage is read in place, never copied.
+            </p>
+            {payload.transcription && (
+              <p className="font-mono text-[10.5px] text-ink-faint">
+                Transcripts: {payload.transcription.engine === "none" ? "not available — see Settings → AI model" : payload.transcription.detail}
+              </p>
+            )}
+            {model.preset === "groq" && (
+              <p className="rounded-md border border-line px-3 py-2 text-[11px] leading-relaxed text-ink-faint">
+                Groq&rsquo;s free tier limits tokens per minute. Long builds may pause for rate limits (the agent waits and
+                retries once). A paid tier works better for full video builds.
+              </p>
+            )}
           </div>
         )}
 
@@ -649,9 +750,43 @@ export function ChatPanel({
           </p>
         )}
         {error && (
-          <InlineError onDismiss={() => setError(null)} className="whitespace-normal">
-            {error}
-          </InlineError>
+          <div className="flex flex-col gap-2">
+            <InlineError onDismiss={() => setError(null)} className="whitespace-normal">
+              {errorCode === "rate_limit"
+                ? `${presetLabel} rate limit hit. ${error}`
+                : errorCode === "context"
+                  ? `This turn is too big for ${model.model}'s limits.`
+                  : error}
+            </InlineError>
+            {!busy && (errorCode === "rate_limit" || errorCode === "connection" || errorCode === "other") && (
+              <button
+                type="button"
+                onClick={() => send({ kind: "message", text: "continue" })}
+                className="self-start text-[12px] text-lime hover:underline"
+              >
+                Resume
+              </button>
+            )}
+            {!busy && errorCode === "context" && (
+              <div className="flex gap-3 text-[12px]">
+                <button
+                  type="button"
+                  onClick={async () => {
+                    await fetch(`/api/projects/${projectId}/agent`, { method: "DELETE" });
+                    setHistory([]);
+                    setLastTurn(null);
+                    setError(null);
+                  }}
+                  className="text-lime hover:underline"
+                >
+                  Clear chat (canvas kept)
+                </button>
+                <button type="button" onClick={() => setConnect({})} className="text-ink-dim hover:underline">
+                  Switch model
+                </button>
+              </div>
+            )}
+          </div>
         )}
       </div>
 
@@ -689,6 +824,7 @@ export function ChatPanel({
             <ImagePlus size={14} />
           </button>
           <textarea
+            ref={draftRef}
             value={draft}
             rows={Math.min(6, Math.max(1, draft.split("\n").length))}
             onChange={(e) => setDraft(e.target.value)}

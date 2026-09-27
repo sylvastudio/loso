@@ -8,9 +8,9 @@ import { AiPanel } from "@/components/settings/ai-panel";
 import { cx } from "@/components/ui";
 
 const TABS = [
-  { id: "keys", label: "API Keys" },
-  { id: "brand", label: "Brand" },
   { id: "ai", label: "AI model" },
+  { id: "keys", label: "Pipeline keys" },
+  { id: "brand", label: "Brand" },
 ] as const;
 
 type TabId = (typeof TABS)[number]["id"];
@@ -28,8 +28,8 @@ function SettingsInner() {
   const router = useRouter();
   const params = useSearchParams();
   const raw = params.get("tab");
-  const tab: TabId = TABS.some((t) => t.id === raw) ? (raw as TabId) : "keys";
-  const setTab = (t: TabId) => router.replace(t === "keys" ? "/settings" : `/settings?tab=${t}`, { scroll: false });
+  const tab: TabId = TABS.some((t) => t.id === raw) ? (raw as TabId) : "ai";
+  const setTab = (t: TabId) => router.replace(t === "ai" ? "/settings" : `/settings?tab=${t}`, { scroll: false });
 
   // Warn before leaving with unsaved brand edits, pasted-but-unsaved keys, or AI model edits.
   const [dirty, setDirty] = useState({ keys: false, brand: false, ai: false });
