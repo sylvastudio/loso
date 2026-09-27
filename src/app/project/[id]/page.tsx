@@ -3,8 +3,10 @@
 import { use, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { Player } from "@remotion/player";
-import { ArrowLeft, CircleAlert, Pause, Play, Sparkles } from "lucide-react";
-import { Button, Field, Select, Textarea, cx } from "@/components/ui";
+import { ArrowLeft, Pause, Play, Sparkles } from "lucide-react";
+import { Button, ErrorState, Field, InlineError, Select, Textarea, cx } from "@/components/ui";
+import { FetchError, fetchJson, jsonInit } from "@/lib/fetch-json";
+import { EditableTitle, NarrowScreenNote, SaveStatus, type SaveState } from "@/components/editor-chrome";
 import { FontLoader } from "@/components/font-loader";
 import { ShortComposition, SHORT_FPS } from "@/remotion/short";
 import { CompositorEditor } from "@/components/compositor/editor";
@@ -59,6 +61,7 @@ function SliderRow({
       <span className="micro w-[72px] shrink-0">{label}</span>
       <input
         type="range"
+        aria-label={label}
         min={min}
         max={max}
         step={step}
@@ -76,15 +79,36 @@ function SliderRow({
 export default function ProjectPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
   const [route, setRoute] = useState<{ kind: string; project: RawProject } | null>(null);
+  const [failure, setFailure] = useState<{ notFound: boolean; message: string } | null>(null);
 
-  useEffect(() => {
-    fetch(`/api/projects/${id}`)
-      .then((r) => r.json())
-      .then((d) =>
-        setRoute({ kind: d.project?.settings?.kind ?? "ai-short", project: d.project })
-      );
+  const load = useCallback(() => {
+    setFailure(null);
+    fetchJson<{ project: RawProject }>(`/api/projects/${id}`)
+      .then((d) => setRoute({ kind: d.project.settings?.kind ?? "ai-short", project: d.project }))
+      .catch((e: FetchError) => setFailure({ notFound: e.status === 404, message: e.message }));
   }, [id]);
 
+  useEffect(load, [load]);
+
+  if (failure) {
+    const back = (
+      <Link href="/" className="text-[13px] text-ink-dim transition-colors hover:text-lime">
+        ← All projects
+      </Link>
+    );
+    return failure.notFound ? (
+      <ErrorState
+        title="This project no longer exists"
+        detail="It may have been deleted, or the link is mistyped."
+      >
+        {back}
+      </ErrorState>
+    ) : (
+      <ErrorState detail={`The project couldn't load (${failure.message}).`} onRetry={load}>
+        {back}
+      </ErrorState>
+    );
+  }
   if (!route) {
     return <p className="py-24 text-center text-sm text-ink-faint">Loading…</p>;
   }
@@ -97,6 +121,7 @@ export default function ProjectPage({ params }: { params: Promise<{ id: string }
 interface RawProject {
   id: string;
   title: string;
+  updatedAt: number;
   settings: { kind?: string; compositor?: import("@/lib/compositor").CompositorDoc };
   artifacts: { render?: { url: string; renderedAt: number } };
 }
@@ -110,25 +135,35 @@ function AiShortEditor({ id }: { id: string }) {
   const [stage, setStage] = useState<Stage>("idle");
   const [error, setError] = useState<string | null>(null);
   const [previewingVoice, setPreviewingVoice] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [keys, setKeys] = useState<Record<string, boolean> | null>(null);
+  const [saveState, setSaveState] = useState<SaveState>("idle");
   const previewAudio = useRef<HTMLAudioElement | null>(null);
   const scriptRef = useRef("");
 
-  useEffect(() => {
-    fetch(`/api/projects/${id}`)
-      .then((r) => r.json())
-      .then((d) => {
-        setProject(d.project);
-        scriptRef.current = d.project?.script ?? "";
-      });
-    fetch("/api/brand")
-      .then((r) => r.json())
-      .then((d) => setBrand(d.brand));
-    fetch("/api/voices").then(async (r) => {
-      const d = await r.json();
-      if (r.ok) setVoices(d.voices);
-      else setVoicesError(d.error === "missing_key" ? "missing_key" : d.error);
-    });
+  const load = useCallback(() => {
+    setLoadError(null);
+    Promise.all([
+      fetchJson<{ project: Project }>(`/api/projects/${id}`),
+      fetchJson<{ brand: Brand }>("/api/brand"),
+    ])
+      .then(([p, b]) => {
+        setProject(p.project);
+        scriptRef.current = p.project.script ?? "";
+        setBrand(b.brand);
+      })
+      .catch((e: Error) => setLoadError(e.message));
+    fetchJson<{ keys: Array<{ id: string; set: boolean }> }>("/api/keys")
+      .then((d) => setKeys(Object.fromEntries(d.keys.map((k) => [k.id, k.set]))))
+      .catch(() => setKeys(null));
+    fetchJson<{ voices: VoiceOption[] }>("/api/voices")
+      .then((d) => setVoices(d.voices))
+      .catch((e: FetchError) =>
+        setVoicesError(e.body.error === "missing_key" ? "missing_key" : e.message)
+      );
   }, [id]);
+
+  useEffect(load, [load]);
 
   // Debounced normalized-character meter
   useEffect(() => {
@@ -140,7 +175,8 @@ function AiShortEditor({ id }: { id: string }) {
         body: JSON.stringify({ text: project.script }),
       })
         .then((r) => r.json())
-        .then((d) => setNormalized({ count: d.count, limit: d.limit }));
+        .then((d) => setNormalized({ count: d.count, limit: d.limit }))
+        .catch(() => {});
     }, 350);
     return () => clearTimeout(t);
   }, [project?.script, project === null]);
@@ -149,20 +185,75 @@ function AiShortEditor({ id }: { id: string }) {
     setProject((prev) => (prev ? { ...prev, ...p } : prev));
   }, []);
 
-  async function persist(patch: Record<string, unknown>) {
-    const res = await fetch(`/api/projects/${id}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(patch),
-    });
-    const d = await res.json();
-    if (res.ok) setProject(d.project);
+  // Server-side save; returns the saved project (or null on failure) and
+  // drives the header save indicator.
+  const persist = useCallback(
+    async (patch: Record<string, unknown>, opts: { adopt?: boolean } = {}) => {
+      setSaveState("saving");
+      try {
+        const d = await fetchJson<{ project: Project }>(`/api/projects/${id}`, jsonInit("PATCH", patch));
+        setSaveState("saved");
+        // Don't clobber in-flight local typing with the server copy unless asked.
+        if (opts.adopt) setProject(d.project);
+        return d.project;
+      } catch {
+        setSaveState("error");
+        return null;
+      }
+    },
+    [id]
+  );
+
+  // Debounced autosave for the script and voice sliders — no more losing
+  // edits to a closed tab or a reload.
+  const pendingSave = useRef<Record<string, unknown> | null>(null);
+  const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const flushSave = useCallback(
+    (keepalive = false) => {
+      if (saveTimer.current) clearTimeout(saveTimer.current);
+      saveTimer.current = null;
+      const patch = pendingSave.current;
+      pendingSave.current = null;
+      if (!patch) return Promise.resolve(null);
+      if (typeof patch.script === "string") scriptRef.current = patch.script;
+      if (keepalive) {
+        fetch(`/api/projects/${id}`, { ...jsonInit("PATCH", patch), keepalive: true }).catch(() => {});
+        return Promise.resolve(null);
+      }
+      return persist(patch);
+    },
+    [id, persist]
+  );
+  const queueSave = useCallback(
+    (patch: Record<string, unknown>) => {
+      pendingSave.current = { ...pendingSave.current, ...patch };
+      setSaveState("dirty");
+      if (saveTimer.current) clearTimeout(saveTimer.current);
+      saveTimer.current = setTimeout(() => flushSave(), 600);
+    },
+    [flushSave]
+  );
+  useEffect(() => {
+    const onHide = () => flushSave(true);
+    window.addEventListener("pagehide", onHide);
+    return () => {
+      window.removeEventListener("pagehide", onHide);
+      flushSave(true);
+    };
+  }, [flushSave]);
+
+  function setSliders(voice: NonNullable<Project["settings"]["voice"]>) {
+    if (!project) return;
+    const settings = { ...project.settings, voice };
+    patchLocal({ settings });
+    queueSave({ settings });
   }
 
   async function generate() {
     if (!project) return;
     setError(null);
-    // Persist the latest script before synthesis
+    // Persist the latest script + sliders before synthesis
+    await flushSave();
     if (project.script !== scriptRef.current) {
       await persist({ script: project.script });
       scriptRef.current = project.script;
@@ -170,20 +261,21 @@ function AiShortEditor({ id }: { id: string }) {
     setStage("voice");
     try {
       const sliders = project.settings.voice ?? DEFAULT_SLIDERS;
-      let res = await fetch(`/api/projects/${id}/voiceover`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ voiceId: project.settings.voiceId, settings: sliders }),
+      const voiced = await fetchJson<{ project: Project }>(
+        `/api/projects/${id}/voiceover`,
+        jsonInit("POST", { voiceId: project.settings.voiceId, settings: sliders })
+      ).catch((e: FetchError) => {
+        throw new Error(e.body.error === "missing_key" ? "missing_key:ElevenLabs" : e.message);
       });
-      let d = await res.json();
-      if (!res.ok) throw new Error(d.error === "missing_key" ? "missing_key:elevenlabs" : d.error);
-      setProject(d.project);
+      setProject(voiced.project);
 
       setStage("sync");
-      res = await fetch(`/api/projects/${id}/transcribe`, { method: "POST" });
-      d = await res.json();
-      if (!res.ok) throw new Error(d.error === "missing_key" ? "missing_key:groq" : d.error);
-      setProject(d.project);
+      const synced = await fetchJson<{ project: Project }>(`/api/projects/${id}/transcribe`, {
+        method: "POST",
+      }).catch((e: FetchError) => {
+        throw new Error(e.body.error === "missing_key" ? "missing_key:Groq" : e.message);
+      });
+      setProject(synced.project);
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -215,6 +307,9 @@ function AiShortEditor({ id }: { id: string }) {
     ? Math.max(60, Math.ceil((LEAD_IN_SEC + transcript.durationSec + 0.6) * SHORT_FPS))
     : 60;
 
+  if (loadError) {
+    return <ErrorState detail={`The project couldn't load (${loadError}).`} onRetry={load} />;
+  }
   if (!project || !brand) {
     return <p className="py-24 text-center text-sm text-ink-faint">Loading…</p>;
   }
@@ -223,12 +318,29 @@ function AiShortEditor({ id }: { id: string }) {
   const meterPct = normalized ? Math.min(100, (normalized.count / normalized.limit) * 100) : 0;
   const sliders = project.settings.voice ?? DEFAULT_SLIDERS;
   const busy = stage !== "idle";
-  const canGenerate =
-    !busy && !!project.settings.voiceId && !!project.script.trim() && !over && !voicesError;
+  // Why Generate is unavailable, in the order the user should fix things.
+  // Groq is checked up front so we never spend ElevenLabs credits on a run
+  // that will fail at transcription.
+  const blocker: { text: string; settings?: boolean } | null =
+    keys && !keys.elevenlabs
+      ? { text: "Add an ElevenLabs key", settings: true }
+      : keys && !keys.groq
+        ? { text: "Add a Groq key for captions", settings: true }
+        : voicesError && voicesError !== "missing_key"
+          ? { text: "Voices couldn't load" }
+          : !project.script.trim()
+            ? { text: "Write a script" }
+            : !project.settings.voiceId
+              ? { text: "Choose a voice" }
+              : over && normalized
+                ? { text: `Script is ${(normalized.count - normalized.limit).toLocaleString()} chars over` }
+                : null;
+  const canGenerate = !busy && !blocker;
 
   return (
     <div className="flex h-full flex-col">
       <FontLoader families={[brand.fonts.caption]} />
+      <NarrowScreenNote />
 
       {/* Project header strip */}
       <div className="flex h-12 shrink-0 items-center gap-4 border-b border-line px-5">
@@ -239,11 +351,17 @@ function AiShortEditor({ id }: { id: string }) {
           <ArrowLeft size={13} /> All projects
         </Link>
         <span className="h-3.5 w-px bg-line" />
-        <h1 className="truncate font-serif text-[16px] italic tracking-tight">{project.title}</h1>
+        <EditableTitle
+          value={project.title}
+          onSave={async (title) => {
+            patchLocal({ title });
+            await persist({ title });
+          }}
+        />
+        <SaveStatus state={saveState} onRetry={() => persist({ script: project.script, settings: project.settings })} />
         <div className="flex-1" />
         {error && (
-          <span className="flex items-center gap-1.5 text-[12px] text-danger">
-            <CircleAlert size={13} />
+          <InlineError onDismiss={() => setError(null)} className="max-w-[420px]">
             {error.startsWith("missing_key") ? (
               <>
                 Missing {error.split(":")[1]} key —{" "}
@@ -252,7 +370,18 @@ function AiShortEditor({ id }: { id: string }) {
                 </Link>
               </>
             ) : (
-              error.slice(0, 110)
+              error
+            )}
+          </InlineError>
+        )}
+        {!busy && !error && blocker && (
+          <span className="text-[12px] text-ink-dim">
+            {blocker.settings ? (
+              <Link href="/settings" className="underline-offset-2 hover:text-lime hover:underline">
+                {blocker.text} →
+              </Link>
+            ) : (
+              blocker.text
             )}
           </span>
         )}
@@ -289,13 +418,12 @@ function AiShortEditor({ id }: { id: string }) {
             <Textarea
               rows={11}
               value={project.script}
-              onChange={(e) => patchLocal({ script: e.target.value })}
-              onBlur={() => {
-                if (project.script !== scriptRef.current) {
-                  persist({ script: project.script });
-                  scriptRef.current = project.script;
-                }
+              aria-label="Script"
+              onChange={(e) => {
+                patchLocal({ script: e.target.value });
+                queueSave({ script: e.target.value });
               }}
+              onBlur={() => flushSave()}
               placeholder="Type or paste your narration…"
             />
             <div className="mt-1.5 h-0.5 w-full overflow-hidden rounded bg-line">
@@ -327,7 +455,9 @@ function AiShortEditor({ id }: { id: string }) {
                   <Select
                     value={project.settings.voiceId ?? ""}
                     onChange={(e) => {
-                      persist({ settings: { ...project.settings, voiceId: e.target.value } });
+                      const settings = { ...project.settings, voiceId: e.target.value };
+                      patchLocal({ settings });
+                      persist({ settings });
                     }}
                   >
                     <option value="" disabled>
@@ -359,9 +489,7 @@ function AiShortEditor({ id }: { id: string }) {
                 min={0}
                 max={1}
                 step={0.05}
-                onChange={(v) =>
-                  patchLocal({ settings: { ...project.settings, voice: { ...sliders, stability: v } } })
-                }
+                onChange={(v) => setSliders({ ...sliders, stability: v })}
               />
               <SliderRow
                 label="Similarity"
@@ -369,9 +497,7 @@ function AiShortEditor({ id }: { id: string }) {
                 min={0}
                 max={1}
                 step={0.05}
-                onChange={(v) =>
-                  patchLocal({ settings: { ...project.settings, voice: { ...sliders, similarity: v } } })
-                }
+                onChange={(v) => setSliders({ ...sliders, similarity: v })}
               />
               <SliderRow
                 label="Style"
@@ -379,9 +505,7 @@ function AiShortEditor({ id }: { id: string }) {
                 min={0}
                 max={1}
                 step={0.05}
-                onChange={(v) =>
-                  patchLocal({ settings: { ...project.settings, voice: { ...sliders, style: v } } })
-                }
+                onChange={(v) => setSliders({ ...sliders, style: v })}
               />
               <SliderRow
                 label="Speed"
@@ -389,18 +513,20 @@ function AiShortEditor({ id }: { id: string }) {
                 min={0.7}
                 max={1.2}
                 step={0.05}
-                onChange={(v) =>
-                  patchLocal({ settings: { ...project.settings, voice: { ...sliders, speed: v } } })
-                }
+                onChange={(v) => setSliders({ ...sliders, speed: v })}
               />
             </div>
           </div>
 
           <div className="grid grid-cols-2 gap-5 border-t border-line pt-5">
-            <Field label="Pace">
+            <Field label="Pace" hint="with visuals · soon">
               <Select
                 value={project.settings.pace}
-                onChange={(e) => persist({ settings: { ...project.settings, pace: e.target.value } })}
+                onChange={(e) => {
+                  const settings = { ...project.settings, pace: e.target.value };
+                  patchLocal({ settings });
+                  persist({ settings });
+                }}
               >
                 <option value="chill">Chill · 9s</option>
                 <option value="normal">Normal · 6s</option>
@@ -411,9 +537,14 @@ function AiShortEditor({ id }: { id: string }) {
             <Field label="Captions">
               <Select
                 value={project.settings.captionStyle}
-                onChange={(e) =>
-                  persist({ settings: { ...project.settings, captionStyle: e.target.value } })
-                }
+                onChange={(e) => {
+                  const settings = {
+                    ...project.settings,
+                    captionStyle: e.target.value as Project["settings"]["captionStyle"],
+                  };
+                  patchLocal({ settings });
+                  persist({ settings });
+                }}
               >
                 <option value="clean">Clean</option>
                 <option value="dynamic">Dynamic</option>
@@ -486,9 +617,7 @@ function AiShortEditor({ id }: { id: string }) {
           <div className="shrink-0 border-t border-line px-6 py-3">
             <div className="flex items-center gap-3">
               <span className="micro">Timeline</span>
-              <span className="text-[11px] text-ink-faint">
-                visual shots arrive in Milestone 3
-              </span>
+              <span className="text-[11px] text-ink-faint">Visual shots — coming soon</span>
               {transcript && (
                 <span className="ml-auto font-mono text-[11px] text-ink-dim">
                   {transcript.durationSec.toFixed(1)}s · {transcript.words.length} words ·{" "}

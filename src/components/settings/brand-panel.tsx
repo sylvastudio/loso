@@ -1,18 +1,20 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ImagePlus, Music4, Plus, Trash2 } from "lucide-react";
+import { ImagePlus, Loader2, Music4, Plus, Trash2 } from "lucide-react";
 import { FONT_CHOICES, defaultBrand, type Brand, type Presenter } from "@/lib/brand";
-import { Button, Field, Input, Section, Select, Switch, Textarea } from "@/components/ui";
+import { Button, ErrorState, Field, InlineError, Input, Section, Select, Switch, Textarea } from "@/components/ui";
+import { fetchJson, jsonInit } from "@/lib/fetch-json";
 import { FontLoader } from "@/components/font-loader";
 
 async function uploadFile(file: File, kind: string): Promise<{ hash: string; url: string }> {
   const form = new FormData();
   form.append("file", file);
   form.append("kind", kind);
-  const res = await fetch("/api/assets", { method: "POST", body: form });
-  if (!res.ok) throw new Error("Upload failed");
-  const d = await res.json();
+  const d = await fetchJson<{ asset: { hash: string; url: string } }>("/api/assets", {
+    method: "POST",
+    body: form,
+  });
   return d.asset;
 }
 
@@ -130,25 +132,60 @@ function ColorField({
   );
 }
 
-export function BrandPanel() {
+type UploadSlot = "logo" | "presenter" | "music";
+
+// Section notes: be honest about which brand settings the renderer uses today.
+const IN_USE = <span className="micro text-lime">in use · captions</span>;
+const SOON = <span className="micro text-ink-dim">coming soon</span>;
+
+export function BrandPanel({ onDirtyChange }: { onDirtyChange?: (dirty: boolean) => void }) {
   const [brand, setBrand] = useState<Brand | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [savedJson, setSavedJson] = useState("");
   const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
   const [savedFlash, setSavedFlash] = useState(false);
+  const [uploadingSlot, setUploadingSlot] = useState<UploadSlot | null>(null);
+  const [uploadError, setUploadError] = useState<{ slot: UploadSlot; msg: string } | null>(null);
   const logoInput = useRef<HTMLInputElement>(null);
   const presenterInput = useRef<HTMLInputElement>(null);
   const musicInput = useRef<HTMLInputElement>(null);
 
-  useEffect(() => {
-    fetch("/api/brand")
-      .then((r) => r.json())
+  const load = useCallback(() => {
+    setLoadError(null);
+    fetchJson<{ brand: Brand }>("/api/brand")
       .then((d) => {
         setBrand(d.brand);
         setSavedJson(JSON.stringify(d.brand));
-      });
+      })
+      .catch((e: Error) => setLoadError(e.message));
   }, []);
 
+  useEffect(load, [load]);
+
   const dirty = brand !== null && JSON.stringify(brand) !== savedJson;
+  useEffect(() => onDirtyChange?.(dirty), [dirty, onDirtyChange]);
+
+  /** Upload into a slot with a per-slot spinner and inline error. */
+  async function uploadInto(slot: UploadSlot, file: File, apply: (hash: string) => void) {
+    setUploadingSlot(slot);
+    setUploadError(null);
+    try {
+      const asset = await uploadFile(file, slot);
+      apply(asset.hash);
+    } catch (e) {
+      setUploadError({ slot, msg: `Upload failed — ${(e as Error).message}` });
+    } finally {
+      setUploadingSlot(null);
+    }
+  }
+
+  const slotError = (slot: UploadSlot) =>
+    uploadError?.slot === slot ? (
+      <InlineError className="mt-2" onDismiss={() => setUploadError(null)}>
+        {uploadError.msg}
+      </InlineError>
+    ) : null;
 
   const patch = useCallback((p: Partial<Brand>) => {
     setBrand((b) => (b ? { ...b, ...p } : b));
@@ -157,21 +194,23 @@ export function BrandPanel() {
   async function save() {
     if (!brand) return;
     setSaving(true);
-    const res = await fetch("/api/brand", {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ brand }),
-    });
-    if (res.ok) {
-      const d = await res.json();
+    setSaveError(null);
+    try {
+      const d = await fetchJson<{ brand: Brand }>("/api/brand", jsonInit("PUT", { brand }));
       setBrand(d.brand);
       setSavedJson(JSON.stringify(d.brand));
       setSavedFlash(true);
       setTimeout(() => setSavedFlash(false), 1800);
+    } catch (e) {
+      setSaveError((e as Error).message);
+    } finally {
+      setSaving(false);
     }
-    setSaving(false);
   }
 
+  if (loadError) {
+    return <ErrorState detail={`Brand settings couldn't load (${loadError}).`} onRetry={load} />;
+  }
   if (!brand) {
     return <p className="py-16 text-center text-sm text-ink-faint">Loading brand…</p>;
   }
@@ -185,7 +224,8 @@ export function BrandPanel() {
           <Section
             n="01"
             title="Identity"
-            description="Name, logo, and the calls-to-action every video carries."
+            description="Name, logo, and the calls-to-action for the outro card."
+            actions={SOON}
           >
             <div className="grid grid-cols-1 gap-6 sm:grid-cols-2">
               <Field label="Brand name">
@@ -226,19 +266,20 @@ export function BrandPanel() {
                 className="hidden"
                 onChange={async (e) => {
                   const f = e.target.files?.[0];
-                  if (f) {
-                    const asset = await uploadFile(f, "logo");
-                    patch({ logoHash: asset.hash });
-                  }
+                  if (f) await uploadInto("logo", f, (hash) => patch({ logoHash: hash }));
                   e.target.value = "";
                 }}
               />
               <button
                 type="button"
                 onClick={() => logoInput.current?.click()}
+                aria-label={brand.logoHash ? "Replace logo" : "Upload logo"}
+                disabled={uploadingSlot === "logo"}
                 className="flex h-14 w-14 items-center justify-center overflow-hidden border border-dashed border-line-strong transition-colors hover:border-lime"
               >
-                {brand.logoHash ? (
+                {uploadingSlot === "logo" ? (
+                  <Loader2 size={16} className="animate-spin text-lime" />
+                ) : brand.logoHash ? (
                   // eslint-disable-next-line @next/next/no-img-element
                   <img
                     src={assetUrl(brand.logoHash)!}
@@ -259,6 +300,7 @@ export function BrandPanel() {
                     Remove
                   </button>
                 )}
+                {slotError("logo")}
               </div>
             </div>
           </Section>
@@ -266,7 +308,8 @@ export function BrandPanel() {
           <Section
             n="02"
             title="Look & tone"
-            description="Colors and fonts flow into captions and overlays. Tone words steer the AI's imagery."
+            description="Background, primary, highlight and caption font style your captions today. Accent, display font and tone words apply when overlays and AI visuals ship."
+            actions={IN_USE}
           >
             <div className="grid grid-cols-2 gap-x-8 gap-y-6">
               <ColorField
@@ -319,7 +362,7 @@ export function BrandPanel() {
             </div>
 
             <div className="mt-7">
-              <Field label="Visual tone words" hint="steers AI image prompts">
+              <Field label="Visual tone words" hint="for AI visuals · coming soon">
                 <Input
                   value={brand.toneWords}
                   placeholder="bright, modern, editorial"
@@ -332,11 +375,24 @@ export function BrandPanel() {
           <Section
             n="03"
             title="Presenters"
-            description="Optional corner presenter with an audio-reactive visualizer. Voice mapping unlocks with an ElevenLabs key."
+            description="Optional corner presenter with an audio-reactive visualizer. Not rendered yet — set it up now and it will be ready."
             actions={
-              <Button size="sm" variant="outline" onClick={() => presenterInput.current?.click()}>
-                <Plus size={13} /> Add
+              <div className="flex flex-col items-start gap-3">
+                {SOON}
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={uploadingSlot === "presenter"}
+                onClick={() => presenterInput.current?.click()}
+              >
+                {uploadingSlot === "presenter" ? (
+                  <Loader2 size={13} className="animate-spin" />
+                ) : (
+                  <Plus size={13} />
+                )}{" "}
+                Add
               </Button>
+              </div>
             }
           >
             <input
@@ -347,14 +403,15 @@ export function BrandPanel() {
               onChange={async (e) => {
                 const f = e.target.files?.[0];
                 if (f) {
-                  const asset = await uploadFile(f, "presenter");
-                  const presenter: Presenter = {
-                    id: Math.random().toString(36).slice(2, 9),
-                    name: f.name.replace(/\.[^.]+$/, ""),
-                    imageHash: asset.hash,
-                    voiceId: null,
-                  };
-                  patch({ presenters: [...brand.presenters, presenter] });
+                  await uploadInto("presenter", f, (hash) => {
+                    const presenter: Presenter = {
+                      id: Math.random().toString(36).slice(2, 9),
+                      name: f.name.replace(/\.[^.]+$/, ""),
+                      imageHash: hash,
+                      voiceId: null,
+                    };
+                    setBrand((b) => (b ? { ...b, presenters: [...b.presenters, presenter] } : b));
+                  });
                 }
                 e.target.value = "";
               }}
@@ -385,7 +442,9 @@ export function BrandPanel() {
                       }
                     />
                     <button
-                      className="text-ink-faint transition-colors hover:text-danger"
+                      aria-label={`Remove presenter ${p.name}`}
+                      title="Remove presenter"
+                      className="flex h-7 w-7 items-center justify-center text-ink-faint transition-colors hover:text-danger"
                       onClick={() =>
                         patch({ presenters: brand.presenters.filter((x) => x.id !== p.id) })
                       }
@@ -396,12 +455,14 @@ export function BrandPanel() {
                 ))}
               </div>
             )}
+            {slotError("presenter")}
           </Section>
 
           <Section
             n="04"
             title="Bookends & music"
             description="Intro / outro animations and an optional looped music bed under the voice."
+            actions={SOON}
           >
             <div className="flex flex-col gap-6">
               <div className="flex items-center gap-10">
@@ -426,14 +487,24 @@ export function BrandPanel() {
                   onChange={async (e) => {
                     const f = e.target.files?.[0];
                     if (f) {
-                      const asset = await uploadFile(f, "music");
-                      patch({ music: { ...brand.music, assetHash: asset.hash } });
+                      await uploadInto("music", f, (hash) =>
+                        setBrand((b) => (b ? { ...b, music: { ...b.music, assetHash: hash } } : b))
+                      );
                     }
                     e.target.value = "";
                   }}
                 />
-                <Button size="sm" variant="outline" onClick={() => musicInput.current?.click()}>
-                  <Music4 size={13} />
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={uploadingSlot === "music"}
+                  onClick={() => musicInput.current?.click()}
+                >
+                  {uploadingSlot === "music" ? (
+                    <Loader2 size={13} className="animate-spin" />
+                  ) : (
+                    <Music4 size={13} />
+                  )}
                   {brand.music.assetHash ? "Replace music" : "Upload music bed"}
                 </Button>
                 {brand.music.assetHash && (
@@ -443,6 +514,7 @@ export function BrandPanel() {
                       <span className="micro">vol</span>
                       <input
                         type="range"
+                        aria-label="Music volume"
                         min={0}
                         max={0.4}
                         step={0.01}
@@ -453,7 +525,9 @@ export function BrandPanel() {
                       />
                     </div>
                     <button
-                      className="text-ink-faint transition-colors hover:text-danger"
+                      aria-label="Remove music bed"
+                      title="Remove music bed"
+                      className="flex h-7 w-7 items-center justify-center text-ink-faint transition-colors hover:text-danger"
                       onClick={() => patch({ music: { ...brand.music, assetHash: null } })}
                     >
                       <Trash2 size={13} />
@@ -461,6 +535,7 @@ export function BrandPanel() {
                   </>
                 )}
               </div>
+              {slotError("music")}
 
               <Field label="Disclaimer" hint="optional — small print on the outro">
                 <Textarea
@@ -488,7 +563,13 @@ export function BrandPanel() {
             <span className="pr-3 text-[13px] text-lime">Brand saved</span>
           ) : (
             <>
-              <span className="text-[13px] text-ink-dim">Unsaved changes</span>
+              {saveError ? (
+                <span className="text-[13px] text-danger" role="alert">
+                  Save failed — {saveError}
+                </span>
+              ) : (
+                <span className="text-[13px] text-ink-dim">Unsaved changes</span>
+              )}
               <Button
                 size="sm"
                 variant="ghost"
@@ -497,7 +578,7 @@ export function BrandPanel() {
                 Discard
               </Button>
               <Button size="sm" onClick={save} disabled={saving}>
-                {saving ? "Saving…" : "Save brand"}
+                {saving ? "Saving…" : saveError ? "Retry save" : "Save brand"}
               </Button>
             </>
           )}

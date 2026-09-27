@@ -51,7 +51,7 @@ export const Textarea = forwardRef<
     <textarea
       ref={ref}
       className={cx(
-        "w-full resize-none rounded-lg border border-line bg-panel/60 px-3.5 py-3 text-sm leading-relaxed text-ink outline-none transition-colors placeholder:text-ink-faint focus:border-line-strong",
+        "w-full resize-none rounded-lg border border-line bg-panel/60 px-3.5 py-3 text-sm leading-relaxed text-ink outline-none transition-colors placeholder:text-ink-faint focus:border-lime/60",
         className
       )}
       {...props}
@@ -123,7 +123,7 @@ export function Switch({
       <span
         className={cx(
           "relative h-[18px] w-[34px] rounded-full border transition-colors duration-200",
-          checked ? "border-lime bg-lime" : "border-line-strong bg-transparent group-hover:border-ink-faint"
+          checked ? "border-lime bg-lime" : "border-line-strong bg-transparent group-hover:border-ink-ghost"
         )}
       >
         <span
@@ -181,6 +181,68 @@ export function StatusWord({ ok, labels }: { ok: boolean; labels: [string, strin
     <span className="inline-flex items-center gap-2">
       <span className={cx("led", ok && "on")} />
       <span className={cx("micro", ok ? "text-lime" : "")}>{ok ? labels[0] : labels[1]}</span>
+    </span>
+  );
+}
+
+// ---------- Error states ----------
+
+/** Full-panel failure state in the editorial empty-state voice, with a retry. */
+export function ErrorState({
+  title = "Couldn't reach the studio",
+  detail,
+  onRetry,
+  children,
+}: {
+  title?: string;
+  detail?: string;
+  onRetry?: () => void;
+  children?: ReactNode;
+}) {
+  return (
+    <div className="flex flex-col items-center gap-3 py-24 text-center" role="alert">
+      <p className="font-serif text-[21px] italic text-ink-dim">{title}</p>
+      {detail && <p className="max-w-sm text-[12.5px] leading-relaxed text-ink-faint">{detail}</p>}
+      <div className="mt-2 flex items-center gap-3">
+        {onRetry && (
+          <Button size="sm" variant="outline" onClick={onRetry}>
+            Retry
+          </Button>
+        )}
+        {children}
+      </div>
+    </div>
+  );
+}
+
+/** One-line dismissable error for header strips and panels. */
+export function InlineError({
+  children,
+  onDismiss,
+  className,
+}: {
+  children: ReactNode;
+  onDismiss?: () => void;
+  className?: string;
+}) {
+  return (
+    <span
+      role="alert"
+      className={cx("flex min-w-0 items-center gap-1.5 text-[12px] text-danger", className)}
+    >
+      <span className="min-w-0 truncate" title={typeof children === "string" ? children : undefined}>
+        {children}
+      </span>
+      {onDismiss && (
+        <button
+          type="button"
+          onClick={onDismiss}
+          aria-label="Dismiss error"
+          className="flex h-6 w-6 shrink-0 items-center justify-center rounded text-danger/70 hover:text-danger"
+        >
+          ×
+        </button>
+      )}
     </span>
   );
 }

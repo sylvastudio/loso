@@ -1,41 +1,58 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { ArrowUpRight } from "lucide-react";
 import { PROVIDERS } from "@/lib/providers";
-import { Button, Input, StatusWord } from "@/components/ui";
+import { fetchJson, jsonInit } from "@/lib/fetch-json";
+import { Button, ErrorState, InlineError, Input, StatusWord } from "@/components/ui";
 
 interface KeyState {
   set: boolean;
   masked: string | null;
 }
 
-export function KeysPanel() {
-  const [status, setStatus] = useState<Record<string, KeyState>>({});
+export function KeysPanel({ onDirtyChange }: { onDirtyChange?: (dirty: boolean) => void }) {
+  const [status, setStatus] = useState<Record<string, KeyState> | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState<string | null>(null);
+  const [saveErrors, setSaveErrors] = useState<Record<string, string>>({});
 
-  useEffect(() => {
-    fetch("/api/keys")
-      .then((r) => r.json())
+  const load = useCallback(() => {
+    setLoadError(null);
+    fetchJson<{ keys: Array<{ id: string } & KeyState> }>("/api/keys")
       .then((d) => {
         const map: Record<string, KeyState> = {};
         for (const k of d.keys) map[k.id] = { set: k.set, masked: k.masked };
         setStatus(map);
-      });
+      })
+      .catch((e: Error) => setLoadError(e.message));
   }, []);
+
+  useEffect(load, [load]);
+
+  const dirty = Object.values(drafts).some((v) => v.trim());
+  useEffect(() => onDirtyChange?.(dirty), [dirty, onDirtyChange]);
 
   async function save(id: string, value: string) {
     setBusy(id);
-    const res = await fetch("/api/keys", {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id, value }),
-    });
-    const d = await res.json();
-    setStatus((s) => ({ ...s, [id]: { set: d.set, masked: d.masked } }));
-    setDrafts((s) => ({ ...s, [id]: "" }));
-    setBusy(null);
+    setSaveErrors((s) => ({ ...s, [id]: "" }));
+    try {
+      const d = await fetchJson<KeyState>("/api/keys", jsonInit("PUT", { id, value }));
+      setStatus((s) => ({ ...s, [id]: { set: d.set, masked: d.masked } }));
+      setDrafts((s) => ({ ...s, [id]: "" }));
+    } catch (e) {
+      setSaveErrors((s) => ({ ...s, [id]: `Couldn't save — ${(e as Error).message}` }));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  if (loadError) {
+    return <ErrorState detail={`Key status couldn't load (${loadError}).`} onRetry={load} />;
+  }
+  if (!status) {
+    return <p className="py-16 text-center text-sm text-ink-faint">Loading keys…</p>;
   }
 
   return (
@@ -61,6 +78,7 @@ export function KeysPanel() {
                   <span className="micro text-lime">{String(i + 1).padStart(2, "0")}</span>
                   <h3 className="font-serif text-[18px] tracking-tight">{p.label}</h3>
                   {p.optional && <span className="micro">opt</span>}
+                  {!p.live && <span className="micro text-ink-dim">soon</span>}
                 </div>
                 <p className="mt-1 text-[12px] leading-relaxed text-ink-faint">{p.role}</p>
               </div>
@@ -70,6 +88,7 @@ export function KeysPanel() {
                   <Input
                     type="password"
                     autoComplete="off"
+                    aria-label={`${p.label} API key`}
                     placeholder={
                       ok && st?.masked ? `Saved · ${st.masked} — paste to replace` : p.placeholder
                     }
@@ -94,13 +113,22 @@ export function KeysPanel() {
                     </Button>
                   )}
                 </div>
-                <p className="mt-2.5 text-[12px] leading-relaxed text-ink-faint">
-                  {ok ? <>Unlocks: {p.unlocks}.</> : p.degraded}
-                </p>
+                {saveErrors[p.id] ? (
+                  <InlineError
+                    className="mt-2.5"
+                    onDismiss={() => setSaveErrors((s) => ({ ...s, [p.id]: "" }))}
+                  >
+                    {saveErrors[p.id]}
+                  </InlineError>
+                ) : (
+                  <p className="mt-2.5 text-[12px] leading-relaxed text-ink-faint">
+                    {ok ? <>Unlocks: {p.unlocks}.</> : p.degraded}
+                  </p>
+                )}
               </div>
 
               <div className="flex flex-col items-end justify-between gap-3">
-                <StatusWord ok={ok} labels={["Live", "Off"]} />
+                <StatusWord ok={ok} labels={p.live ? ["Live", "Off"] : ["Saved", "Off"]} />
                 <a
                   href={p.docsUrl}
                   target="_blank"

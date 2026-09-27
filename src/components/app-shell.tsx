@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
-import { PROVIDERS } from "@/lib/providers";
+import { LIVE_REQUIRED } from "@/lib/providers";
 
 interface KeyStatus {
   id: string;
@@ -55,11 +55,12 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           <Link
             href="/settings"
             title="Provider keys"
+            aria-label={`Provider keys: ${LIVE_REQUIRED.filter((p) => keys?.find((k) => k.id === p.id)?.set).length} of ${LIVE_REQUIRED.length} set`}
             className="ml-2 flex items-center gap-1.5 border-l border-line pl-6"
           >
-            {PROVIDERS.filter((p) => !p.optional).map((p) => {
+            {LIVE_REQUIRED.map((p) => {
               const ok = keys?.find((k) => k.id === p.id)?.set ?? false;
-              return <span key={p.id} className={`led ${ok ? "on" : ""}`} title={p.label} />;
+              return <span key={p.id} className={`led ${ok ? "on" : ""}`} title={`${p.label}: ${ok ? "set" : "missing"}`} />;
             })}
           </Link>
         </nav>

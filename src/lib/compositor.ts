@@ -13,6 +13,7 @@ export type Anim = z.infer<typeof animSchema>;
 
 const baseLayer = {
   id: z.string(),
+  name: z.string().optional(), // user-facing label (defaults to the uploaded file name)
   x: z.number().default(0),
   y: z.number().default(0),
   width: z.number().default(200),
