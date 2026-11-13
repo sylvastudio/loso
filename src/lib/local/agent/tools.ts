@@ -10,8 +10,8 @@ import { DOC_TOOLS, S, cleanDoc, describeDoc, interactiveTools, num, str } from 
 import { applyTemplate } from "../../templates-core";
 import { localAssetUrls } from "../assets";
 import { deleteLocalTemplate, getLocalTemplate, listLocalTemplates, saveLocalTemplate } from "../templates";
-import { contactSheet, frameAt, MAX_TRANSCRIBE_SEC, scanFolder, transcriptOf } from "./footage";
-import { renderStillJpeg } from "./still";
+import { contactSheet, frameAt, MAX_TRANSCRIBE_SEC, scanFolder, transcriptOf, unreadableClips } from "./footage";
+import { renderStillJpeg, type StillError } from "./still";
 
 export interface BrowserToolCtx {
   dir: FileSystemDirectoryHandle;
@@ -62,8 +62,30 @@ const TOOLS: BrowserTool[] = [
       if (!ctx.vision) return { text: "This model can't see images, so here is the layout instead:\n" + describeDoc(doc) };
       const urls = await localAssetUrls(ctx.dir, ctx.projectId, mediaRefs(doc));
       const t = num(a.timeSec, 0);
-      const data = await renderStillJpeg(resolveDocWith(doc, urls), Math.round(t * doc.output.fps));
-      return { text: `frame at ${t}s (${doc.output.width}×${doc.output.height}, shown at half size)`, images: [jpeg(data)] };
+      const frame = Math.round(t * doc.output.fps);
+      try {
+        const { data, scale } = await renderStillJpeg(resolveDocWith(doc, urls), frame);
+        const size = `${Math.round(doc.output.width * scale)}×${Math.round(doc.output.height * scale)}`;
+        return { text: `frame at ${t}s (${doc.output.width}×${doc.output.height}, shown at ${size})`, images: [jpeg(data)] };
+      } catch (e) {
+        // Say why, name a clip the browser can't decode if there is one, and
+        // give the layout as words so the turn can carry on without the picture.
+        const err = e as StillError;
+        const onScreen = doc.layers
+          .filter((l) => (l.type === "video" || l.type === "audio") && frame >= l.from && frame < l.from + l.durationInFrames)
+          .map((l) => (l as { assetHash: string }).assetHash);
+        const bad = await unreadableClips(ctx.dir, onScreen).catch(() => []);
+        const cause =
+          bad.length > 0
+            ? `${bad.map((b) => `"${b.clip}": ${b.why}`).join("; ")} (it will look black in the video; the user could convert it to H.264 MP4)`
+            : err.kind === "timeout"
+              ? `${err.message}. Tried again at a smaller size; that timed out too. Don't keep retrying the snapshot this turn`
+              : `${err.message}`;
+        return {
+          text: `Couldn't draw the frame at ${t}s: ${cause}.\nHere is the layout as words instead:\n${describeDoc(doc)}`,
+          isError: true,
+        };
+      }
     },
   },
 

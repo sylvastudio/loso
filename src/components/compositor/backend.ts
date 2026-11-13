@@ -47,7 +47,14 @@ export interface EditorBackend {
   importFile(file: File): Promise<string>;
   /** URLs the Player and export can load, by asset ref (null = missing). */
   assetUrls(refs: string[]): Promise<Record<string, string | null>>;
-  exportVideo(doc: CompositorDoc, onProgress: (p: number | null) => void): Promise<ExportedVideo>;
+  /**
+   * Make the MP4. `test`: a quick small copy (first 10 seconds, about half
+   * size) saved next to the real one, which it never replaces. Backends that
+   * can't make one make the full video.
+   */
+  exportVideo(doc: CompositorDoc, onProgress: (p: number | null) => void, opts?: { test?: boolean }): Promise<ExportedVideo>;
+  /** Clips in the doc this browser can't decode (they'd come out black), if the backend can tell. */
+  unreadableClips?(doc: CompositorDoc): Promise<Array<{ clip: string; why: string }>>;
   /** Newer saved copy written by someone else (MCP, another tab), if any. */
   fetchLatest?(): Promise<{ updatedAt: number; doc: CompositorDoc | undefined }>;
   templates: TemplateBackend;

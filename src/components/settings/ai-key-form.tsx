@@ -2,6 +2,7 @@
 
 import { LocalConnect } from "@/components/agent/local-connect";
 import { UsagePanel } from "@/components/settings/usage-panel";
+import { MemoryPanel } from "@/components/settings/memory-panel";
 import { useEffect, useId, useState } from "react";
 import { ArrowUpRight, Check, ChevronRight, Loader2 } from "lucide-react";
 import { Button, cx } from "@/components/ui";
@@ -62,6 +63,7 @@ export function LocalKeyForm() {
     <>
       <LocalConnect className="" />
       <UsagePanel />
+      <MemoryPanel />
     </>
   );
 }

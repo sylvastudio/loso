@@ -8,6 +8,7 @@ import { ALL_FORMATS, BlobSource, CanvasSink, Input } from "mediabunny";
 import { fileAt, listMedia, type MediaKind } from "../folder";
 import { idbGet, idbPut } from "../db";
 import { transcribeLocal, type LocalWord } from "../transcribe";
+import { transcribeIsHeavy } from "../memory";
 
 export interface ClipInfo {
   clip: string; // path inside the folder — also the assetHash for layers
@@ -77,7 +78,8 @@ export async function contactSheet(dir: FileSystemDirectoryHandle, clip: string)
     const cols = 6;
     const w = 240;
     const h = Math.round((w * track.displayHeight) / Math.max(1, track.displayWidth));
-    const sink = new CanvasSink(track, { width: w, height: h, fit: "contain" });
+    // One reused canvas: each frame is drawn onto the sheet before the next decodes.
+    const sink = new CanvasSink(track, { width: w, height: h, fit: "contain", poolSize: 1 });
     const times = Array.from({ length: count }, (_, k) => Math.min(dur - 0.05, k * interval + 0.01));
     const rows = Math.ceil(count / cols);
     const sheet = new OffscreenCanvas(cols * w, rows * h);
@@ -89,7 +91,9 @@ export async function contactSheet(dir: FileSystemDirectoryHandle, clip: string)
       if (frame) ctx.drawImage(frame.canvas as CanvasImageSource, (k % cols) * w, Math.floor(k / cols) * h, w, h);
       k++;
     }
-    return { data: await toJpegBase64(sheet, 0.72), count, intervalSec: Math.round(interval * 100) / 100 };
+    const data = await toJpegBase64(sheet, 0.72);
+    sheet.width = sheet.height = 1; // release the pixels now, not at the next GC
+    return { data, count, intervalSec: Math.round(interval * 100) / 100 };
   });
 }
 
@@ -98,12 +102,50 @@ export async function frameAt(dir: FileSystemDirectoryHandle, clip: string, time
   return withInput(file, async (input) => {
     const track = await input.getPrimaryVideoTrack();
     if (!track) throw new Error(`${clip} has no picture.`);
-    const frame = await new CanvasSink(track, { width: 960 }).getCanvas(Math.max(0, timeSec));
+    // At most 960 px on the long side (a portrait phone clip was 960×1707 before).
+    const k = Math.min(1, 960 / Math.max(track.displayWidth, track.displayHeight, 1));
+    const width = Math.max(2, Math.round(track.displayWidth * k));
+    const height = Math.max(2, Math.round(track.displayHeight * k));
+    const frame = await new CanvasSink(track, { width, height, fit: "contain", poolSize: 1 }).getCanvas(Math.max(0, timeSec));
     if (!frame) throw new Error(`No frame at ${timeSec}s in ${clip}.`);
     const c = new OffscreenCanvas(frame.canvas.width, frame.canvas.height);
     c.getContext("2d")!.drawImage(frame.canvas as CanvasImageSource, 0, 0);
-    return toJpegBase64(c);
+    const data = await toJpegBase64(c);
+    c.width = c.height = 1;
+    return data;
   });
+}
+
+/**
+ * Clips this browser can't decode (e.g. some phone HEVC .MOV files, ProRes),
+ * by path. Reads only the file headers: cheap, no frames decoded. Such clips
+ * render as black (or fail) in the in-tab export and snapshots.
+ */
+export async function unreadableClips(dir: FileSystemDirectoryHandle, paths: string[]): Promise<Array<{ clip: string; why: string }>> {
+  const out: Array<{ clip: string; why: string }> = [];
+  for (const clip of [...new Set(paths)]) {
+    let file: File;
+    try {
+      file = await (await fileAt(dir, clip)).getFile();
+    } catch {
+      continue; // missing files are reported elsewhere
+    }
+    if (file.type.startsWith("image/")) continue;
+    try {
+      await withInput(file, async (input) => {
+        const v = await input.getPrimaryVideoTrack();
+        if (v && !(await v.canDecode())) {
+          out.push({ clip, why: `its picture (${v.codec ?? "unknown codec"}) can't be decoded by this browser` });
+          return;
+        }
+        const a = await input.getPrimaryAudioTrack();
+        if (a && !(await a.canDecode())) out.push({ clip, why: `its sound (${a.codec ?? "unknown codec"}) can't be decoded by this browser` });
+      });
+    } catch {
+      out.push({ clip, why: "the file couldn't be read as a video" });
+    }
+  }
+  return out;
 }
 
 // ---------- transcripts ----------
@@ -154,7 +196,12 @@ export async function transcriptOf(
   const key = `${clip}|${file.size}|${file.lastModified}|${Math.round(fromSec)}-${Math.round(toSec)}`;
   const cached = await idbGet<ClipTranscript>("transcripts", key).catch(() => undefined);
   if (cached) return cached;
-  const t = await transcribeLocal(file, { startSec: fromSec, maxSec: toSec - fromSec, onStatus: opts.onStatus });
+  // A long stretch on a small computer: say so on every step (it still runs).
+  const onStatus =
+    opts.onStatus && transcribeIsHeavy(toSec - fromSec)
+      ? (s: string) => opts.onStatus!(`${s} This is a lot of talking for this computer: closing other tabs and apps helps.`)
+      : opts.onStatus;
+  const t = await transcribeLocal(file, { startSec: fromSec, maxSec: toSec - fromSec, onStatus });
   const words = t.words.map((w) => ({ ...w, start: w.start + fromSec, end: w.end + fromSec }));
   const out: ClipTranscript = { words, sentences: sentencesOf(words), fromSec, toSec: fromSec + t.audioSec };
   await idbPut("transcripts", key, out).catch(() => {});

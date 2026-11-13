@@ -6,7 +6,6 @@ import type { PlayerRef } from "@remotion/player";
 import { PenLine, Undo2 } from "lucide-react";
 import { Button, cx } from "@/components/ui";
 import { LosoMark } from "@/components/logo";
-import { CompositorComposition } from "@/remotion/compositor";
 import type { CompositorDoc, Layer, ResolvedCompositorDoc } from "@/lib/compositor";
 import { clockAt } from "@/lib/screenshot";
 
@@ -63,31 +62,11 @@ function pathOf(s: Pt[]) {
 }
 
 async function renderFrame(doc: ResolvedCompositorDoc, frame: number, scale: number): Promise<OffscreenCanvas> {
-  // The whole capture (loading the renderer included) gets a few seconds;
-  // after that Loso gets the sketch instead of the user waiting.
-  const timeout = new Promise<never>((_, rej) => setTimeout(() => rej(new Error("timed out")), 6000));
-  return Promise.race([drawFrame(doc, frame, scale), timeout]);
-}
-
-async function drawFrame(doc: ResolvedCompositorDoc, frame: number, scale: number): Promise<OffscreenCanvas> {
-  const { renderStillOnWeb } = await import("@remotion/web-renderer");
-  const props = { doc, webMedia: true };
-  return renderStillOnWeb({
-    composition: {
-      id: "compositor",
-      component: CompositorComposition,
-      width: doc.output.width,
-      height: doc.output.height,
-      fps: doc.output.fps,
-      durationInFrames: Math.max(1, doc.output.durationInFrames),
-      defaultProps: props,
-    },
-    inputProps: props,
-    frame,
-    scale,
-    isProduction: false,
-    delayRenderTimeoutInMilliseconds: 6000,
-  }).then((r) => r.canvas());
+  // The whole capture gets a few seconds; after that Loso gets the sketch
+  // instead of the user waiting. The render is cancelled, not left running
+  // (Remotion renders one at a time, so a stuck one would hold up the next).
+  const { renderStillCanvas } = await import("@/lib/local/agent/still");
+  return renderStillCanvas(doc, frame, scale, { timeoutMs: 6000, isProduction: false });
 }
 
 /** Frame (or a sketch of the pieces) + the marks, as a PNG. */
@@ -110,6 +89,7 @@ async function makePicture(
   try {
     const shot = await renderFrame(doc, frame, scale);
     ctx.drawImage(shot, 0, 0, cw, ch);
+    shot.width = shot.height = 1; // drawn: let its pixels go now
   } catch {
     // Couldn't draw the real frame: a plain map of where the pieces are.
     sketch = true;

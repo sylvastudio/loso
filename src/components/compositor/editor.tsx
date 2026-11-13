@@ -44,6 +44,8 @@ import { TemplatesSection } from "@/components/compositor/templates-section";
 import { FolderTray } from "@/components/compositor/folder-tray";
 import { VersionsPanel } from "@/components/compositor/versions-panel";
 import { VideoReady } from "@/components/compositor/video-ready";
+import { HeavyJobAsk, type HeavyChoice } from "@/components/compositor/heavy-job";
+import { estimateRender, type JobEstimate } from "@/lib/local/memory";
 import { DropOverlay, useWindowFileDrag } from "@/components/compositor/drop-overlay";
 import { PointAtIt, PointAtItButton } from "@/components/compositor/point-at-it";
 import { ThemeToggle } from "@/components/theme-toggle";
@@ -232,7 +234,16 @@ export function CompositorEditor({ backend }: { backend: EditorBackend }) {
   const [dockStatus, setDockStatus] = useState<DockStatus>(IDLE_STATUS);
   const [versionsOpen, setVersionsOpen] = useState(false);
   // "Done." — the finished video, shown once right after it's made.
-  const [ready, setReady] = useState<{ url: string; savedAs: string | null } | null>(null);
+  const [ready, setReady] = useState<{ url: string; savedAs: string | null; test?: boolean } | null>(null);
+  // "This is a big video for this computer": the open question, if any.
+  const [heavyAsk, setHeavyAsk] = useState<{
+    est: JobEstimate;
+    unreadable: Array<{ clip: string; why: string }>;
+    resolve: (c: HeavyChoice) => void;
+  } | null>(null);
+  // The doc a quick test was made of: making the whole video next doesn't ask again.
+  const testedDoc = useRef<CompositorDoc | null>(null);
+  const asking = useRef(false);
   const makeBtnRef = useRef<HTMLButtonElement>(null);
   // While marking, the frame moves down below the Point-at-it toolbar.
   const [markBarH, setMarkBarH] = useState(0);
@@ -866,6 +877,10 @@ export function CompositorEditor({ backend }: { backend: EditorBackend }) {
       setError(msg);
       return { error: msg };
     }
+    // A heavy video for this computer, or clips it can't read: ask first (never blocks).
+    const choice = await askBeforeMaking(doc);
+    if (choice === "cancel") return { error: "Not made yet: the user chose to wait." };
+    const test = choice === "test";
     setRendering(true);
     // Keep the screen on while it works: a phone that locks pauses the tab.
     let wake: { release(): Promise<void> } | null = null;
@@ -880,8 +895,18 @@ export function CompositorEditor({ backend }: { backend: EditorBackend }) {
       // Render reads the saved doc, so make sure the latest edit is saved first.
       if (!(await flush())) throw new Error("Couldn't save your latest changes, so making the video was stopped.");
       const exported = doc;
-      const d = await backend.exportVideo(exported, setRenderProgress);
-      setRenderUrl(d.url);
+      const d = await backend.exportVideo(exported, setRenderProgress, test ? { test: true } : undefined);
+      if (test) {
+        testedDoc.current = exported;
+        setReady({ url: d.url, savedAs: d.savedAs ?? null, test: true });
+        announce("Your test is ready. It's the first 10 seconds, smaller. If it looks right, make the whole video.");
+        return { savedAs: d.savedAs ?? undefined };
+      }
+      // The previous download link points at an older copy: let it go.
+      setRenderUrl((old) => {
+        if (old && old !== d.url && old.startsWith("blob:")) setTimeout(() => URL.revokeObjectURL(old), 0);
+        return d.url;
+      });
       setSavedAs(d.savedAs ?? null);
       setRenderedDoc(exported);
       setReady({ url: d.url, savedAs: d.savedAs ?? null });
@@ -904,6 +929,30 @@ export function CompositorEditor({ backend }: { backend: EditorBackend }) {
     }
   }
   const renderStale = !!renderUrl && renderedDoc !== doc;
+
+  async function askBeforeMaking(d: CompositorDoc): Promise<HeavyChoice> {
+    if (backend.kind !== "local") return "full";
+    // Already checking or asking (a second click, or the agent): don't stack a second question.
+    if (asking.current) return "cancel";
+    asking.current = true;
+    const est = estimateRender(d);
+    const unreadable = (await backend.unreadableClips?.(d).catch(() => [])) ?? [];
+    if (!unreadable.length && (est.load === "light" || testedDoc.current === d)) {
+      asking.current = false;
+      return "full";
+    }
+    return new Promise<HeavyChoice>((resolve) =>
+      setHeavyAsk({
+        est,
+        unreadable,
+        resolve: (c) => {
+          asking.current = false;
+          setHeavyAsk(null);
+          resolve(c);
+        },
+      })
+    );
+  }
 
   // The in-browser agent makes the video with the same button (render_video, after the user confirms).
   const exportRef = useRef(exportVideo);
@@ -1871,13 +1920,15 @@ export function CompositorEditor({ backend }: { backend: EditorBackend }) {
         {ready && (
           <VideoReady
             url={ready.url}
-            fileName={`${safeFileName(title)}.mp4`}
+            fileName={`${safeFileName(title)}${ready.test ? " (test)" : ""}.mp4`}
             savedAs={ready.savedAs}
             folderName={backend.folder?.name}
             inBrowser={backend.folder?.inBrowser}
             aspect={output.width / output.height}
             right={safeRight}
             onClose={() => {
+              // A test copy's link isn't kept anywhere else: free it.
+              if (ready.test && ready.url.startsWith("blob:")) URL.revokeObjectURL(ready.url);
               setReady(null);
               requestAnimationFrame(() => makeBtnRef.current?.focus());
             }}
@@ -1906,6 +1957,15 @@ export function CompositorEditor({ backend }: { backend: EditorBackend }) {
 
       {dragTypes && <DropOverlay types={dragTypes} {...inbox.dropProps(dragTypes)} />}
       {inbox.choiceNode(safeRight)}
+      {heavyAsk && (
+        <HeavyJobAsk
+          est={heavyAsk.est}
+          unreadable={heavyAsk.unreadable}
+          canTest={backend.kind === "local"}
+          right={safeRight}
+          onChoose={heavyAsk.resolve}
+        />
+      )}
     </div>
   );
 }

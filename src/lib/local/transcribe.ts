@@ -34,26 +34,33 @@ export async function decodeAudio16k(file: Blob, maxSec: number, startSec = 0): 
   try {
     const track = await input.getPrimaryAudioTrack();
     if (!track) throw new Error("This clip has no audio track.");
-    const parts: AudioBuffer[] = [];
-    for await (const { buffer } of new AudioBufferSink(track).buffers(startSec, startSec + maxSec)) parts.push(buffer);
-    if (parts.length === 0) throw new Error("No audio could be decoded from this clip.");
-
-    const srcRate = parts[0].sampleRate;
-    const total = parts.reduce((n, b) => n + b.length, 0);
-    const mono = new Float32Array(total);
-    let off = 0;
-    for (const b of parts) {
+    // Mix each decoded chunk down to mono as it arrives and let the decoded
+    // (often 48 kHz stereo) buffer go: holding them all first doubled the
+    // memory for long clips (10 min of stereo ≈ 230 MB on its own).
+    const parts: Float32Array<ArrayBuffer>[] = [];
+    let srcRate = 0;
+    let total = 0;
+    for await (const { buffer: b } of new AudioBufferSink(track).buffers(startSec, startSec + maxSec)) {
+      srcRate ||= b.sampleRate;
+      const m = new Float32Array(b.length);
       for (let c = 0; c < b.numberOfChannels; c++) {
         const ch = b.getChannelData(c);
-        for (let i = 0; i < b.length; i++) mono[off + i] += ch[i] / b.numberOfChannels;
+        for (let i = 0; i < b.length; i++) m[i] += ch[i] / b.numberOfChannels;
       }
-      off += b.length;
+      parts.push(m);
+      total += m.length;
     }
+    if (parts.length === 0) throw new Error("No audio could be decoded from this clip.");
 
     const outLen = Math.ceil((total * SAMPLE_RATE) / srcRate);
     const ctx = new OfflineAudioContext(1, outLen, SAMPLE_RATE);
     const buf = ctx.createBuffer(1, total, srcRate);
-    buf.copyToChannel(mono, 0);
+    let off = 0;
+    for (const m of parts) {
+      buf.copyToChannel(m, 0, off);
+      off += m.length;
+    }
+    parts.length = 0;
     const node = ctx.createBufferSource();
     node.buffer = buf;
     node.connect(ctx.destination);
@@ -69,7 +76,37 @@ type Asr = (
   opts: object
 ) => Promise<{ text: string; chunks?: { text: string; timestamp: [number, number | null] }[] }>;
 
-let asrPromise: Promise<{ asr: Asr; device: "webgpu" | "wasm" }> | null = null;
+type LoadedAsr = { asr: Asr & { dispose?: () => Promise<void> }; device: "webgpu" | "wasm" };
+let asrPromise: Promise<LoadedAsr> | null = null;
+
+// The speech model takes a few hundred MB (plus graphics memory on WebGPU).
+// Keep it while it's being used, and let it go after a few quiet minutes; the
+// next use loads it again from the browser's cache (a few seconds, no download).
+const ASR_IDLE_MS = 3 * 60 * 1000;
+let asrUsers = 0;
+let idleTimer: ReturnType<typeof setTimeout> | undefined;
+
+async function withAsr<T>(onStatus: (s: string) => void, fn: (m: LoadedAsr) => Promise<T>): Promise<T> {
+  clearTimeout(idleTimer);
+  asrUsers++;
+  try {
+    return await fn(await loadAsr(onStatus));
+  } finally {
+    if (--asrUsers === 0) idleTimer = setTimeout(releaseSpeechModel, ASR_IDLE_MS);
+  }
+}
+
+/** Free the speech model now (it reloads on next use). Safe to call anytime. */
+export async function releaseSpeechModel(): Promise<void> {
+  if (asrUsers > 0 || !asrPromise) return;
+  const p = asrPromise;
+  asrPromise = null;
+  try {
+    await (await p).asr.dispose?.();
+  } catch {
+    /* already gone */
+  }
+}
 
 function loadAsr(onStatus: (s: string) => void) {
   asrPromise ??= (async () => {
@@ -94,7 +131,7 @@ function loadAsr(onStatus: (s: string) => void) {
           revision: MODEL_REVISION,
           progress_callback: progress,
         });
-        return { asr: asr as unknown as Asr, device: "webgpu" as const };
+        return { asr: asr as unknown as LoadedAsr["asr"], device: "webgpu" as const };
       } catch (e) {
         console.warn("[loso] WebGPU Whisper failed, falling back to WASM", e);
       }
@@ -105,7 +142,7 @@ function loadAsr(onStatus: (s: string) => void) {
       revision: MODEL_REVISION,
       progress_callback: progress,
     });
-    return { asr: asr as unknown as Asr, device: "wasm" as const };
+    return { asr: asr as unknown as LoadedAsr["asr"], device: "wasm" as const };
   })();
   asrPromise.catch(() => (asrPromise = null));
   return asrPromise;
@@ -120,10 +157,12 @@ export async function transcribeLocal(
   const audio = await decodeAudio16k(file, maxSec, startSec);
   const t1 = performance.now();
   onStatus("Loading speech model…");
-  const { asr, device } = await loadAsr(onStatus);
-  const t2 = performance.now();
-  onStatus(`Transcribing on ${device === "webgpu" ? "the graphics card" : "the CPU"}…`);
-  const out = await asr(audio, { return_timestamps: "word", chunk_length_s: 30 });
+  let t2 = 0;
+  const { out, device } = await withAsr(onStatus, async ({ asr, device }) => {
+    t2 = performance.now();
+    onStatus(`Transcribing on ${device === "webgpu" ? "the graphics card" : "the CPU"}…`);
+    return { out: await asr(audio, { return_timestamps: "word", chunk_length_s: 30 }), device };
+  });
   const t3 = performance.now();
   return {
     text: out.text.trim(),
@@ -150,8 +189,8 @@ export async function transcribeSpeech(note: Blob, onStatus: (s: string) => void
     for (let i = 0; i < ch.length; i++) mono[i] += ch[i] / decoded.numberOfChannels;
   }
   onStatus("Getting ready to listen…");
-  const { asr } = await loadAsr(onStatus);
-  onStatus("Writing down what you said…");
-  const out = await asr(mono, { chunk_length_s: 30 });
-  return out.text.trim();
+  return withAsr(onStatus, async ({ asr }) => {
+    onStatus("Writing down what you said…");
+    return (await asr(mono, { chunk_length_s: 30 })).text.trim();
+  });
 }
