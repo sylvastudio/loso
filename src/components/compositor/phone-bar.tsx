@@ -72,6 +72,7 @@ export function PhoneMenu({ items }: { items: MenuItem[] }) {
         ref={btnRef}
         type="button"
         aria-label="More"
+        data-tour="more"
         aria-haspopup="menu"
         aria-expanded={open}
         aria-controls={open ? id : undefined}
@@ -187,6 +188,7 @@ export function PhoneTabs({
           <button
             key={t.id}
             id={`phone-tab-${t.id}`}
+            data-tour={`tab-${t.id}`}
             type="button"
             role="tab"
             aria-selected={on}

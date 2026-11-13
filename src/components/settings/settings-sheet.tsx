@@ -21,6 +21,7 @@ import { AiKeyForm, LocalKeyForm } from "@/components/settings/ai-key-form";
 import { AiPanel } from "@/components/settings/ai-panel";
 import { AppearancePicker } from "@/components/theme-toggle";
 import { FeedbackForm } from "@/components/settings/feedback-form";
+import { useTourRequest } from "@/components/tour/tour";
 
 // Settings without leaving the page: a right-side sheet over whatever you're
 // doing (editor or home). Opens from the gear in the editor bar, the home
@@ -85,6 +86,9 @@ export function SettingsSheetProvider({ children }: { children: ReactNode }) {
       if (el && el.isConnected) el.focus();
     });
   }, []);
+
+  // "Show me around again" (Settings → Tell us): step aside so the tour can start.
+  useTourRequest(() => setState(null));
 
   // ⌘/Ctrl + , opens settings anywhere (the usual app shortcut).
   useEffect(() => {

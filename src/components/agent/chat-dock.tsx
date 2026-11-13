@@ -277,6 +277,7 @@ export function ChatDock({
       <aside
         id="loso-chat"
         aria-label="Loso chat"
+        data-tour="chat"
         hidden={!phone.visible}
         className={cx("min-h-0 min-w-0 bg-ground [grid-area:panel]", phone.visible ? "flex" : "hidden")}
       >
@@ -292,6 +293,7 @@ export function ChatDock({
       <aside
         id="loso-chat"
         aria-label="Loso chat"
+        data-tour="chat"
         hidden={state === "closed"}
         className={cx(
           "absolute z-30 flex border border-line-strong bg-ground shadow-[0_30px_80px_-20px_var(--color-shade)]",
@@ -360,6 +362,7 @@ export function ChatDock({
         <button
           ref={pillRef}
           type="button"
+          data-tour="chat"
           onClick={() => go("open")}
           aria-expanded={false}
           aria-controls="loso-chat"

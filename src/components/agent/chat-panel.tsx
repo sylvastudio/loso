@@ -970,7 +970,8 @@ function ChatPanelInner({
             Add your key
           </button>
         )}
-        <div className="min-h-0 flex-1 overflow-y-auto">
+        {/* data-tour-hold: no tour starts while someone is typing their key here. */}
+        <div data-tour="connect" data-tour-hold className="min-h-0 flex-1 overflow-y-auto">
           {api.local ? (
             <LocalConnect
               notice={notice}

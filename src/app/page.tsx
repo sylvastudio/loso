@@ -7,6 +7,8 @@ import { ArrowRight, FolderOpen, ImagePlus, Smartphone, X } from "lucide-react";
 import { Thumbnail } from "@remotion/player";
 import { Button, Field, InlineError, Input, cx } from "@/components/ui";
 import { LosoMark } from "@/components/logo";
+import { Tour } from "@/components/tour/tour";
+import { homeSteps } from "@/components/tour/steps";
 import { CompositorComposition } from "@/remotion/compositor";
 import { mediaRefs, resolveDocWith, type CompositorDoc, type ResolvedCompositorDoc } from "@/lib/compositor";
 import { folderAccessSupported, folderPermission, listFiles, pickFolder, requestFolderPermission } from "@/lib/local/folder";
@@ -314,6 +316,105 @@ function ServerProjects({ onMoved }: { onMoved: (id: string) => void }) {
   );
 }
 
+// ---------- before you start ----------
+
+const LINK = "text-ink underline decoration-line-strong underline-offset-4 transition-colors hover:text-lime";
+
+const BEFORE: Array<{ head: string; body: React.ReactNode }> = [
+  {
+    head: "Chrome or Edge",
+    body: "On a computer, open Loso in Chrome or Edge. On a phone, use Pick videos and photos.",
+  },
+  {
+    head: "An AI key",
+    body: (
+      <>
+        Loso thinks with an AI you choose. Get a key at{" "}
+        <a href="https://console.anthropic.com" target="_blank" rel="noreferrer" className={LINK}>
+          console.anthropic.com
+        </a>
+        . About $5 of credit goes a long way: a typical edit costs a few cents to a dollar. Kids: ask a grown-up.
+      </>
+    ),
+  },
+  {
+    head: "A short video first",
+    body: "Start with a clip under a minute. It's quicker to make, and costs less.",
+  },
+  {
+    head: "It stays with you",
+    body: "Your videos and your key stay on your computer. Nothing is uploaded to Loso.",
+  },
+];
+
+// Four things to know first. Folds down to one line (remembered in this
+// browser) and opens again from there.
+function BeforeYouStart() {
+  const [open, setOpenRaw] = useState<boolean | null>(null);
+  useEffect(() => {
+    try {
+      setOpenRaw(localStorage.getItem("loso:before") !== "folded");
+    } catch {
+      setOpenRaw(true);
+    }
+  }, []);
+  const setOpen = (v: boolean) => {
+    setOpenRaw(v);
+    try {
+      if (v) localStorage.removeItem("loso:before");
+      else localStorage.setItem("loso:before", "folded");
+    } catch {
+      /* it just opens again next time */
+    }
+  };
+  if (open === null) return null;
+
+  if (!open) {
+    return (
+      <div data-tour="before" className="border-b border-line py-2">
+        <button
+          type="button"
+          aria-expanded={false}
+          onClick={() => setOpen(true)}
+          className="flex min-h-10 items-center gap-2 font-mono text-[11px] uppercase tracking-[0.14em] text-ink-dim transition-colors hover:text-ink"
+        >
+          <span aria-hidden>▸</span> Before you start
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <section aria-labelledby="before-h" data-tour="before" className="rise border-b border-line py-9">
+      <div className="flex items-baseline justify-between gap-4">
+        <h2 id="before-h" className="font-mono text-[11px] uppercase tracking-[0.14em] text-ink-dim">
+          Before you start
+        </h2>
+        <button
+          type="button"
+          aria-expanded
+          aria-controls="before-list"
+          onClick={() => setOpen(false)}
+          className="flex min-h-10 items-center text-[13px] text-ink-dim underline-offset-4 transition-colors hover:text-ink hover:underline"
+        >
+          Fold this away
+        </button>
+      </div>
+      <ol id="before-list" className="mt-4 grid grid-cols-1 gap-x-8 gap-y-6 sm:grid-cols-2 lg:grid-cols-4">
+        {BEFORE.map((b, i) => (
+          <li key={b.head} className="border-t border-line pt-3">
+            <span className="font-mono text-[11px] text-lime" aria-hidden>
+              {String(i + 1).padStart(2, "0")}
+            </span>
+            <p className="mt-1 font-serif text-[21px] font-light italic leading-snug tracking-tight text-ink">{b.head}</p>
+            <p className="mt-1.5 text-[13.5px] leading-relaxed text-ink-dim">{b.body}</p>
+          </li>
+        ))}
+      </ol>
+    </section>
+  );
+}
+
 // ---------- home ----------
 
 const TRY_SAYING = [
@@ -515,6 +616,7 @@ export default function ProjectsPage() {
       <header className={cx("border-b border-line", hasProjects ? "pb-9 pt-9 sm:pb-10 sm:pt-12" : "pb-10 pt-10 sm:pb-14 sm:pt-16")}>
         <p className="rise mb-5 font-mono text-[11px] uppercase tracking-[0.14em] text-ink-dim">Tell it the video you want</p>
         <h1
+          data-tour="hero"
           className={cx(
             "rise font-serif font-light leading-[1.0] tracking-[-0.02em]",
             hasProjects ? "text-[clamp(38px,5vw,58px)]" : "text-[clamp(44px,7vw,84px)]"
@@ -543,7 +645,7 @@ export default function ProjectsPage() {
                   looks inside that folder.
                 </p>
               </div>
-              <Button onClick={openFolder} disabled={!!busy} className="h-12 shrink-0 px-6 text-[15px]">
+              <Button data-tour="open" onClick={openFolder} disabled={!!busy} className="h-12 shrink-0 px-6 text-[15px]">
                 {busy ? <LosoMark working size={18} /> : <FolderOpen size={16} aria-hidden />}
                 {busy ? "Opening…" : "Open your folder"}
               </Button>
@@ -577,6 +679,7 @@ export default function ProjectsPage() {
                 </p>
               </div>
               <Button
+                data-tour="open"
                 onClick={() => pickRef.current?.click()}
                 disabled={!!adding}
                 className="h-14 w-full shrink-0 px-6 text-[16px] sm:h-12 sm:w-auto sm:text-[15px]"
@@ -634,6 +737,8 @@ export default function ProjectsPage() {
         )}
       </header>
 
+      <BeforeYouStart />
+
       {/* ---- try saying ---- */}
       <section aria-labelledby="try-h" className="border-b border-line py-9">
         <h2 id="try-h" className="font-mono text-[11px] uppercase tracking-[0.14em] text-ink-dim">
@@ -649,7 +754,7 @@ export default function ProjectsPage() {
       </section>
 
       {/* ---- your videos: an index, not a grid ---- */}
-      <section aria-labelledby="videos-h" className="pt-9">
+      <section aria-labelledby="videos-h" data-tour="videos" className="pt-9">
         <h2 id="videos-h" className="font-mono text-[11px] uppercase tracking-[0.14em] text-ink-dim">
           Your videos
         </h2>
@@ -732,6 +837,8 @@ export default function ProjectsPage() {
       </section>
 
       <ServerProjects onMoved={(id) => router.push(`/edit?id=${id}`)} />
+
+      <Tour id="home" steps={homeSteps(supported)} />
 
       {newIn && <NewProjectModal initialFolder={newIn.folder} opener={newIn.opener} onClose={() => setNewIn(null)} />}
 

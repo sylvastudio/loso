@@ -4,10 +4,11 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { LosoLogo } from "@/components/logo";
 import { usePathname } from "next/navigation";
-import { MessageSquareHeart, Settings2 } from "lucide-react";
+import { CircleHelp, MessageSquareHeart, Settings2 } from "lucide-react";
 import { SettingsSheetProvider, useSettingsSheet } from "@/components/settings/settings-sheet";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { installLogCapture } from "@/lib/log";
+import { showTour } from "@/components/tour/tour";
 
 // Editor routes bring their own single 52px bar, so the app header steps
 // aside there (no double header). Everywhere else: a thin masthead.
@@ -60,6 +61,18 @@ function Shell({ children }: { children: React.ReactNode }) {
           </Link>
           <nav aria-label="Main" className="flex items-center gap-1 sm:gap-6">
             <ThemeToggle showLabel={wide} />
+            {pathname === "/" && (
+              <button
+                type="button"
+                data-tour="help"
+                onClick={() => showTour()}
+                aria-label="Show me around"
+                title="Show me around"
+                className="flex min-h-11 min-w-11 items-center justify-center gap-1.5 text-[13.5px] text-ink-dim transition-colors hover:text-ink sm:min-w-0"
+              >
+                <CircleHelp size={wide ? 14 : 18} aria-hidden /> <span className="hidden sm:inline">Show me around</span>
+              </button>
+            )}
             <button
               type="button"
               aria-haspopup="dialog"
@@ -77,6 +90,7 @@ function Shell({ children }: { children: React.ReactNode }) {
               <button
                 type="button"
                 aria-haspopup="dialog"
+                data-tour="settings"
                 onClick={(e) => settings.open({ opener: e.currentTarget })}
                 title="Settings (⌘ ,)"
                 aria-label="Settings"

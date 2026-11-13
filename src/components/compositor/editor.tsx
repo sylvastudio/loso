@@ -32,6 +32,7 @@ import {
   Sun,
   Moon,
   LayoutGrid,
+  CircleHelp,
 } from "lucide-react";
 import { Button, InlineError, Select, cx } from "@/components/ui";
 import { FontLoader } from "@/components/font-loader";
@@ -60,6 +61,8 @@ import { WordsIcon, WordsPiecesRow, WordsStoryRow } from "@/components/composito
 import { isCaption, styleAll } from "@/lib/caption-set";
 import { CompositorComposition } from "@/remotion/compositor";
 import { LosoLogo, LosoMark } from "@/components/logo";
+import { Tour, showTour } from "@/components/tour/tour";
+import { editorSteps, phoneEditorSteps } from "@/components/tour/steps";
 import { FONT_CHOICES } from "@/lib/fonts";
 import {
   OUTPUT_PRESETS,
@@ -1061,12 +1064,14 @@ export function CompositorEditor({ backend }: { backend: EditorBackend }) {
       onSelect: () => setTheme(nextTheme),
     },
     { key: "settings", icon: Settings2, label: "Settings and AI key", onSelect: () => settings.open({ opener: null }) },
+    { key: "tour", icon: CircleHelp, label: "Show me around", onSelect: () => showTour() },
   ];
 
   // ---- story strip (bottom drawer; the Story tab on a phone) ----
   const storySection = (
           <section
             aria-labelledby="story-h"
+            data-tour="story"
             className={cx("flex shrink-0 flex-col", phone ? "min-h-0 pt-3 [grid-area:panel]" : "border-t border-line")}
             style={phone ? undefined : { paddingRight: safeRight, maxHeight: storyOpen ? "40%" : undefined }}
           >
@@ -1240,7 +1245,7 @@ export function CompositorEditor({ backend }: { backend: EditorBackend }) {
         />
         <div className="min-w-0 flex-1" />
 
-        <div className="hidden shrink-0 items-center lg:flex">
+        <div data-tour="versions" className="hidden shrink-0 items-center lg:flex">
           <button
             onClick={undo}
             disabled={!canUndo || agentBusy}
@@ -1263,6 +1268,7 @@ export function CompositorEditor({ backend }: { backend: EditorBackend }) {
         <button
           ref={versionsBtnRef}
           type="button"
+          data-tour="versions"
           hidden={phone}
           aria-expanded={versionsOpen}
           aria-haspopup="dialog"
@@ -1301,11 +1307,23 @@ export function CompositorEditor({ backend }: { backend: EditorBackend }) {
           hidden={phone}
           aria-haspopup="dialog"
           aria-label="Settings"
+          data-tour="settings"
           title="Settings and your AI key (⌘ ,)"
           onClick={(e) => settings.open({ opener: e.currentTarget })}
           className="flex h-10 w-10 shrink-0 items-center justify-center text-ink-dim transition-colors hover:text-lime"
         >
           <Settings2 size={16} aria-hidden />
+        </button>
+        <button
+          type="button"
+          hidden={phone}
+          data-tour="help"
+          aria-label="Show me around"
+          title="Show me around"
+          onClick={() => showTour()}
+          className="flex h-10 w-10 shrink-0 items-center justify-center text-ink-dim transition-colors hover:text-lime"
+        >
+          <CircleHelp size={16} aria-hidden />
         </button>
         {!phone && <span className="mx-1 h-5 w-px shrink-0 bg-line-strong" aria-hidden />}
         {phone && <PhoneMenu items={phoneMenu} />}
@@ -1332,6 +1350,7 @@ export function CompositorEditor({ backend }: { backend: EditorBackend }) {
         )}
         <Button
           ref={makeBtnRef}
+          data-tour="make"
           // Busy isn't "unavailable": no dimmed lime while making (it read
           // poorly on paper). The button stays readable and simply waits.
           variant={rendering ? "outline" : "primary"}
@@ -1668,6 +1687,7 @@ export function CompositorEditor({ backend }: { backend: EditorBackend }) {
             >
               {dispW > 0 && (layers.length > 0 || previewing) && (
                 <div
+                  data-tour="stage"
                   className="theme-dark relative shrink-0 shadow-[0_30px_90px_-30px_rgba(0,0,0,0.9)]"
                   style={{ width: dispW, height: dispH }}
                   onPointerDown={(e) => e.stopPropagation()}
@@ -1775,7 +1795,7 @@ export function CompositorEditor({ backend }: { backend: EditorBackend }) {
                   className={cx("absolute inset-0 z-20 flex items-center justify-center", phone ? "p-2" : "p-6")}
                   onPointerDown={(e) => e.stopPropagation()}
                 >
-                  <div className={cx("flex max-w-[440px] flex-col", phone ? "gap-3" : "gap-5")}>
+                  <div data-tour="stage" className={cx("flex max-w-[440px] flex-col", phone ? "gap-3" : "gap-5")}>
                     {phone ? (
                       <>
                         <p className="font-serif text-[30px] font-light italic leading-[1.05] tracking-tight text-ink">
@@ -1955,6 +1975,7 @@ export function CompositorEditor({ backend }: { backend: EditorBackend }) {
         )}
       </div>
 
+      <Tour id={phone ? "editor-phone" : "editor"} steps={phone ? phoneEditorSteps : editorSteps} />
       {dragTypes && <DropOverlay types={dragTypes} {...inbox.dropProps(dragTypes)} />}
       {inbox.choiceNode(safeRight)}
       {heavyAsk && (

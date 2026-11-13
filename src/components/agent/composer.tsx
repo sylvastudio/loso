@@ -268,6 +268,7 @@ export const Composer = forwardRef<
               type="button"
               aria-label={listening ? "Stop listening" : voice.state === "writing" ? "Writing down what you said" : "Say it instead of typing"}
               aria-pressed={listening}
+              data-tour="mic"
               title={listening ? "Stop listening (Esc cancels)" : "Say it instead of typing"}
               disabled={voice.state === "writing" || voice.state === "starting"}
               onClick={() => {

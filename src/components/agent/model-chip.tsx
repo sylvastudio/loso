@@ -98,6 +98,7 @@ export function ModelChip({
       <button
         ref={chipRef}
         type="button"
+        data-tour="model"
         aria-haspopup="dialog"
         aria-expanded={open}
         aria-label={`Model: ${name}${vision ? ", sees pictures" : ", can't see pictures"}. Change model`}

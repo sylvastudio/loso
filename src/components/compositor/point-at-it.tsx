@@ -168,6 +168,7 @@ export function PointAtItButton({
       aria-keyshortcuts="Control+Shift+X Meta+Shift+X"
       title={disabledReason ?? `Circle what needs fixing (${POINT_SHORTCUT_LABEL})`}
       aria-label="Point at it"
+      data-tour="point"
       onClick={() => !disabledReason && !active && onStart(ref.current)}
       className={cx(
         "flex h-10 shrink-0 items-center gap-1.5 px-2 text-[13.5px] transition-colors xl:px-2.5",

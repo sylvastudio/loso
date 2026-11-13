@@ -1,9 +1,11 @@
 "use client";
 
 import { useEffect, useId, useState } from "react";
-import { Check, Copy, Download, Loader2 } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { Check, CircleHelp, Copy, Download, Loader2 } from "lucide-react";
 import { buildReport, logCount } from "@/lib/log";
 import { cx } from "@/components/ui";
+import { replayTours } from "@/components/tour/tour";
 
 // "Tell us": ideas, problems, kind words. Loso has no server, so this posts
 // to Netlify Forms (the form is declared in public/__forms.html so Netlify
@@ -157,7 +159,28 @@ export function FeedbackForm() {
       </div>
 
       <ProblemNotes />
+      <ShowAroundAgain />
     </form>
+  );
+}
+
+/** Replays the coach marks: here if this page has some, else from the home page. */
+function ShowAroundAgain() {
+  const router = useRouter();
+  return (
+    <section className="flex flex-col gap-2 border-t border-line pt-4">
+      <h3 className="text-[13px] text-ink">Not sure where things are?</h3>
+      <p className="text-[12.5px] leading-snug text-ink-dim">Loso points at each part of the page and says what it does.</p>
+      <button
+        type="button"
+        onClick={() => {
+          if (!replayTours()) router.push("/");
+        }}
+        className="flex min-h-10 items-center gap-1.5 self-start text-[13.5px] text-lime hover:underline"
+      >
+        <CircleHelp size={14} aria-hidden /> Show me around again
+      </button>
+    </section>
   );
 }
 
