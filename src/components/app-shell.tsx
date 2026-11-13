@@ -7,6 +7,7 @@ import { usePathname } from "next/navigation";
 import { MessageSquareHeart, Settings2 } from "lucide-react";
 import { SettingsSheetProvider, useSettingsSheet } from "@/components/settings/settings-sheet";
 import { ThemeToggle } from "@/components/theme-toggle";
+import { installLogCapture } from "@/lib/log";
 
 // Editor routes bring their own single 52px bar, so the app header steps
 // aside there (no double header). Everywhere else: a thin masthead.
@@ -15,6 +16,7 @@ export function isEditorRoute(pathname: string) {
 }
 
 export function AppShell({ children }: { children: React.ReactNode }) {
+  useEffect(() => installLogCapture(), []);
   return (
     <SettingsSheetProvider>
       <Shell>{children}</Shell>

@@ -81,3 +81,83 @@ function safeHost(url: string): string {
 export function trimSlash(url: string): string {
   return url.replace(/\/+$/, "");
 }
+
+/**
+ * POST and read a server-sent-event stream, calling onEvent for each JSON
+ * `data:` line. Gives up only when the provider goes quiet for idleMs (or
+ * after totalMs in all), so a long reply that keeps arriving never times out.
+ */
+export async function providerStream(
+  label: string,
+  url: string,
+  init: RequestInit & { signal?: AbortSignal | null },
+  onEvent: (event: Record<string, unknown>) => void,
+  { idleMs = 90_000, totalMs = 600_000 } = {}
+): Promise<void> {
+  const idle = new AbortController();
+  let quiet: ReturnType<typeof setTimeout> | undefined;
+  const poke = () => {
+    clearTimeout(quiet);
+    quiet = setTimeout(() => idle.abort(), idleMs);
+  };
+  const total = AbortSignal.timeout(totalMs);
+  const signal = AbortSignal.any([idle.signal, total, ...(init.signal ? [init.signal] : [])]);
+  const timedOut = () =>
+    new ProviderError(
+      idle.signal.aborted ? `${label}: no reply for ${Math.round(idleMs / 1000)}s` : `${label}: still going after ${Math.round(totalMs / 60000)} minutes`,
+      0
+    );
+  poke();
+  try {
+    let res: Response;
+    try {
+      res = await fetch(url, { ...init, signal });
+    } catch (e) {
+      if (init.signal?.aborted) throw new ProviderError(`${label}: request cancelled`, 0);
+      if (idle.signal.aborted || total.aborted) throw timedOut();
+      throw new ProviderError(`${label}: network error reaching ${safeHost(url)} (${(e as Error).message})`, 0);
+    }
+    if (!res.ok || !res.body) {
+      const text = await res.text();
+      let body: unknown = null;
+      try {
+        body = JSON.parse(text);
+      } catch {
+        /* not JSON */
+      }
+      const msg = extractMessage(body) ?? (text ? text.slice(0, 240) : res.statusText || "request failed");
+      throw new ProviderError(`${label} ${res.status}: ${msg}`, res.status);
+    }
+    const reader = res.body.pipeThrough(new TextDecoderStream()).getReader();
+    let buf = "";
+    try {
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        poke();
+        buf += value;
+        let nl: number;
+        while ((nl = buf.indexOf("\n")) >= 0) {
+          const line = buf.slice(0, nl).trim();
+          buf = buf.slice(nl + 1);
+          if (!line.startsWith("data:")) continue;
+          const json = line.slice(5).trim();
+          if (!json || json === "[DONE]") continue;
+          try {
+            onEvent(JSON.parse(json));
+          } catch (e) {
+            if (e instanceof ProviderError) throw e;
+            /* a malformed line: skip it */
+          }
+        }
+      }
+    } catch (e) {
+      if (e instanceof ProviderError) throw e;
+      if (init.signal?.aborted) throw new ProviderError(`${label}: request cancelled`, 0);
+      if (idle.signal.aborted || total.aborted) throw timedOut();
+      throw new ProviderError(`${label}: the reply was cut off (${(e as Error).message})`, 0);
+    }
+  } finally {
+    clearTimeout(quiet);
+  }
+}

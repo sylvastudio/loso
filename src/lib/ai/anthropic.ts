@@ -2,7 +2,7 @@
 // POST {base}/v1/messages with x-api-key + anthropic-version headers.
 
 import type { AiConfig, ChatAdapter, ChatMessage, ChatResponse, ImagePart, ToolCall } from "./types";
-import { ProviderError, providerFetch, trimSlash } from "./http";
+import { ProviderError, providerFetch, providerStream, trimSlash } from "./http";
 import { stripSchemaMeta } from "./openai";
 
 const VERSION = "2023-06-01";
@@ -126,13 +126,48 @@ export const anthropicAdapter: ChatAdapter = {
         input_schema: stripSchemaMeta(t.parameters),
       }));
     }
-    const send = () =>
-      providerFetch(LABEL, `${base(cfg)}/v1/messages`, {
-        method: "POST",
-        headers: headers(cfg),
-        body: JSON.stringify(body),
-        signal: req.signal,
+    // Streamed, so a long reply that keeps arriving is never cut off by a
+    // timeout; the blocks are put back together into the usual message shape.
+    body.stream = true;
+    const send = async () => {
+      const blocks: Array<Record<string, unknown> & { type: string }> = [];
+      const json: string[] = [];
+      const msg: { content: typeof blocks; stop_reason?: string; usage?: Record<string, number> } = { content: blocks };
+      await providerStream(LABEL, `${base(cfg)}/v1/messages`, { method: "POST", headers: headers(cfg), body: JSON.stringify(body), signal: req.signal }, (ev) => {
+        const i = ev.index as number;
+        switch (ev.type) {
+          case "message_start":
+            msg.usage = { ...((ev.message as { usage?: Record<string, number> }).usage ?? {}) };
+            break;
+          case "content_block_start":
+            blocks[i] = { ...(ev.content_block as { type: string }) };
+            json[i] = "";
+            break;
+          case "content_block_delta": {
+            const d = ev.delta as Record<string, string>;
+            const b = blocks[i];
+            if (d.type === "text_delta") b.text = ((b.text as string) ?? "") + d.text;
+            else if (d.type === "input_json_delta") json[i] += d.partial_json;
+            else if (d.type === "thinking_delta") b.thinking = ((b.thinking as string) ?? "") + d.thinking;
+            else if (d.type === "signature_delta") b.signature = d.signature;
+            break;
+          }
+          case "content_block_stop":
+            if (blocks[i]?.type === "tool_use") blocks[i].input = json[i] ? JSON.parse(json[i]) : {};
+            break;
+          case "message_delta":
+            msg.stop_reason = (ev.delta as { stop_reason?: string }).stop_reason ?? msg.stop_reason;
+            Object.assign((msg.usage ??= {}), ev.usage as Record<string, number>);
+            break;
+          case "error": {
+            const err = ev.error as { type?: string; message?: string };
+            const status = err.type === "overloaded_error" ? 529 : err.type === "rate_limit_error" ? 429 : 500;
+            throw new ProviderError(`${LABEL} ${status}: ${err.message ?? err.type}`, status);
+          }
+        }
       });
+      return msg;
+    };
     let raw: unknown;
     try {
       raw = await send();

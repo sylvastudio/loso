@@ -1,13 +1,15 @@
 "use client";
 
-import { useId, useState } from "react";
-import { Loader2 } from "lucide-react";
+import { useEffect, useId, useState } from "react";
+import { Check, Copy, Download, Loader2 } from "lucide-react";
+import { buildReport, logCount } from "@/lib/log";
 import { cx } from "@/components/ui";
 
 // "Tell us": ideas, problems, kind words. Loso has no server, so this posts
 // to Netlify Forms (the form is declared in public/__forms.html so Netlify
 // sees it at deploy). Only what's typed here is sent, plus which page it
-// came from. Never the video, the files or the AI key.
+// came from, and (if ticked) Loso's notes about what went wrong (src/lib/log.ts,
+// keys and pictures already cut out). Never the video, the files or the AI key.
 
 const KINDS = [
   { id: "idea", label: "I have an idea" },
@@ -27,6 +29,9 @@ export function FeedbackForm() {
   const [email, setEmail] = useState("");
   const [state, setState] = useState<"idle" | "sending" | "sent" | "error">("idle");
   const [note, setNote] = useState<string | null>(null);
+  const [withNotes, setWithNotes] = useState(true);
+  const [notes, setNotes] = useState(0);
+  useEffect(() => setNotes(logCount()), []);
 
   async function send() {
     const text = message.trim();
@@ -45,6 +50,7 @@ export function FeedbackForm() {
         message: text.slice(0, MAX),
         email: email.trim(),
         page: location.pathname,
+        logs: kind === "problem" && withNotes ? buildReport(30_000) : "",
       });
       const res = await fetch("/__forms.html", {
         method: "POST",
@@ -121,6 +127,16 @@ export function FeedbackForm() {
         />
       </label>
 
+      {kind === "problem" && (
+        <label className="flex min-h-10 cursor-pointer items-start gap-2.5 text-[13.5px] leading-snug text-ink">
+          <input type="checkbox" checked={withNotes} onChange={(e) => setWithNotes(e.target.checked)} className="mt-0.5 h-4 w-4 accent-[var(--color-lime)]" />
+          <span>
+            Send Loso&rsquo;s notes about what went wrong too ({notes} {notes === 1 ? "note" : "notes"})
+            <span className="block text-[12.5px] text-ink-dim">They help us fix it. Keys and pictures are taken out first.</span>
+          </span>
+        </label>
+      )}
+
       {(note || state === "error") && (
         <p role="alert" className="text-[13px] leading-snug text-ink-dim">
           {state === "error" ? "It didn't send. Check your internet and try again." : note}
@@ -135,8 +151,56 @@ export function FeedbackForm() {
         >
           {state === "sending" && <Loader2 size={14} className="animate-spin" />} Send
         </button>
-        <span className="text-[12px] leading-snug text-ink-faint">Only these words are sent. Never your videos or your AI key.</span>
+        <span className="text-[12px] leading-snug text-ink-faint">
+          {kind === "problem" && withNotes ? "Your words and Loso's notes are sent." : "Only these words are sent."} Never your videos or your AI key.
+        </span>
       </div>
+
+      <ProblemNotes />
     </form>
+  );
+}
+
+/** Copy or save the notes, for sending another way (email, chat) when someone asks for them. */
+function ProblemNotes() {
+  const [copied, setCopied] = useState(false);
+  return (
+    <section className="flex flex-col gap-2 border-t border-line pt-4">
+      <h3 className="text-[13px] text-ink">Asked for Loso&rsquo;s notes?</h3>
+      <p className="text-[12.5px] leading-snug text-ink-dim">
+        Loso keeps notes in this browser about errors and slow steps. Copy them or save them as a file to send. Keys and pictures are taken out.
+      </p>
+      <div className="flex flex-wrap gap-4">
+        <button
+          type="button"
+          onClick={async () => {
+            try {
+              await navigator.clipboard.writeText(buildReport());
+              setCopied(true);
+              setTimeout(() => setCopied(false), 2000);
+            } catch {
+              /* clipboard blocked: the download still works */
+            }
+          }}
+          className="flex min-h-10 items-center gap-1.5 text-[13.5px] text-lime hover:underline"
+        >
+          {copied ? <Check size={14} aria-hidden /> : <Copy size={14} aria-hidden />} {copied ? "Copied" : "Copy notes"}
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            const url = URL.createObjectURL(new Blob([buildReport(200_000)], { type: "text/plain" }));
+            const a = document.createElement("a");
+            a.href = url;
+            a.download = `loso-notes-${new Date().toISOString().slice(0, 10)}.txt`;
+            a.click();
+            setTimeout(() => URL.revokeObjectURL(url), 1000);
+          }}
+          className="flex min-h-10 items-center gap-1.5 text-[13.5px] text-lime hover:underline"
+        >
+          <Download size={14} aria-hidden /> Save as a file
+        </button>
+      </div>
+    </section>
   );
 }

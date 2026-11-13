@@ -13,6 +13,7 @@ import { adapterFor, localAiConfig } from "../ai";
 import { getBudget, monthSpend, recordUsage } from "../usage";
 import { appendChat, loadChat, type LocalChatMessage, type LocalImage, type LocalPart, type LocalStored } from "./history";
 import { browserToolInfos, getBrowserTool, runBrowserTool, type BrowserToolCtx } from "./tools";
+import { logEvent } from "../../log";
 
 export type LocalAgentEvent =
   | { type: "turn"; turn: string }
@@ -32,7 +33,9 @@ export type LocalAgentInput =
 export const NO_KEY_MESSAGE = "No AI key yet — paste one to let Loso think.";
 
 const MAX_STEPS = 40;
-const REPLY_TIMEOUT_MS = 180_000;
+// The whole reply. Claude streams, so a quiet provider fails sooner (90s,
+// lib/ai/http.ts); this only stops one that never finishes.
+const REPLY_TIMEOUT_MS = 600_000;
 const KEEP_IMAGE_MESSAGES = 3;
 const running = new Set<string>();
 
@@ -89,13 +92,18 @@ function unresolved(stored: LocalStored[]): ToolCall[] | null {
 async function chatWithRetry(cfg: AiConfig, req: ChatRequest, emit: (e: LocalAgentEvent) => void) {
   let waited = 0;
   for (let attempt = 0; ; attempt++) {
-    // A reply that never comes must not leave the dock spinning: give up after 3 minutes.
+    // A reply that never comes must not leave the dock spinning.
     const timeout = AbortSignal.timeout(REPLY_TIMEOUT_MS);
     const signal = req.signal ? AbortSignal.any([req.signal, timeout]) : timeout;
+    const started = Date.now();
     try {
-      return await adapterFor(cfg.kind).chat(cfg, { ...req, signal });
+      const res = await adapterFor(cfg.kind).chat(cfg, { ...req, signal });
+      const sec = Math.round((Date.now() - started) / 1000);
+      if (sec >= 60) logEvent("warn", `agent:${cfg.model}`, `slow reply: ${sec}s, ${res.usage?.input ?? "?"} tokens in, ${res.usage?.output ?? "?"} out`);
+      return res;
     } catch (e) {
-      if (timeout.aborted && !req.signal?.aborted) throw new Error("Claude didn't answer for 3 minutes. Try again.");
+      if (timeout.aborted && !req.signal?.aborted) throw new Error("The AI was still going after 10 minutes, so Loso stopped. Try again, or ask for a smaller change.");
+      if (/no reply for \d+s/.test((e as Error).message)) throw new Error("The AI went quiet for 90 seconds. Try again; if it keeps happening, start a new chat (Clear chat).");
       const c = classifyAgentError(e);
       if (c.code !== "rate_limit" || req.signal?.aborted || attempt >= 3 || waited >= 90) throw e;
       const wait = Math.min(45, Math.max(3, Math.ceil((c.retryAfterSec ?? 10) + 2 + attempt * 5)));
@@ -174,6 +182,7 @@ export async function runLocalAgent(
     const out = await runBrowserTool(call.name, ctx, call.args);
     const images = (out.images ?? []).map(asImage);
     await save({ role: "tool", toolCallId: call.id, name: call.name, content: out.text, images, isError: out.isError });
+    if (out.isError) logEvent("warn", `agent:${call.name}`, out.text);
     emit({ type: "tool_end", id: call.id, name: call.name, ok: !out.isError, summary: out.text.slice(0, 280), images: images.map(dataUrl) });
   };
 
@@ -239,7 +248,10 @@ export async function runLocalAgent(
       if (step === MAX_STEPS - 1) emit({ type: "text", text: "(Stopped after many steps — say “continue” to keep going.)" });
     }
   } catch (e) {
-    if (!signal.aborted) emit({ type: "error", message: (e as Error).message, ...classifyAgentError(e) });
+    if (!signal.aborted) {
+      logEvent("error", `agent:${cfg.kind}/${cfg.model}`, e);
+      emit({ type: "error", message: (e as Error).message, ...classifyAgentError(e) });
+    }
   } finally {
     running.delete(projectId);
     emit({ type: "done" });

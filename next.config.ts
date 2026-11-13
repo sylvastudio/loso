@@ -9,7 +9,8 @@ const nextConfig: NextConfig = isStatic
   ? {
       output: "export",
       images: { unoptimized: true },
-      env: { NEXT_PUBLIC_LOSO_STATIC: "1" },
+      // Netlify sets COMMIT_REF at build: problem reports say which version people ran.
+      env: { NEXT_PUBLIC_LOSO_STATIC: "1", NEXT_PUBLIC_LOSO_VERSION: (process.env.COMMIT_REF ?? "local").slice(0, 7) },
       webpack(config) {
         // onnxruntime-web names its 26 MB WASM with `new URL(…, import.meta.url)`,
         // so webpack would copy it into _next/static/media. Loso never loads that
