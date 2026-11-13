@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 import Link from "next/link";
 import { Player, type PlayerRef } from "@remotion/player";
 import {
@@ -37,7 +38,17 @@ import {
 import { Button, InlineError, Select, cx } from "@/components/ui";
 import { FontLoader } from "@/components/font-loader";
 import { EditableTitle, SaveStatus, usePhoneLayout, type SaveState } from "@/components/editor-chrome";
-import { PhoneMenu, PhoneTabs, type MenuItem, type PhoneTab } from "@/components/compositor/phone-bar";
+import {
+  PhoneDock,
+  PhoneMenu,
+  PhoneTabs,
+  phoneDockSpace,
+  type ChatOpenVia,
+  type MenuItem,
+  type PhoneTab,
+} from "@/components/compositor/phone-bar";
+import { MaybeSheet, PhoneSheet, SheetScrim } from "@/components/phone-sheet";
+import { canUseVoice } from "@/components/agent/use-voice";
 import { THEMES, THEME_LABEL, useTheme } from "@/lib/theme";
 import { ChatPanel, STARTERS, type ChatControl } from "@/components/agent/chat-panel";
 import { ChatDock, IDLE_STATUS, dockSafeArea, useAnnouncer, useDockState, type DockStatus } from "@/components/agent/chat-dock";
@@ -260,17 +271,28 @@ export function CompositorEditor({ backend }: { backend: EditorBackend }) {
   // updatedAt of the newest saved copy we know about (ours or adopted)
   const lastSeen = useRef(backend.updatedAt);
   const dock = useDockState(backend.projectId);
-  // Phones: the video on top and Loso / Pieces / Story as tabs below it
-  // (no floating dock, no side rail).
+  // Phones (no floating dock, no side rail). Upright: the video fills the
+  // screen, with a floating bar at the bottom whose Loso / Pieces / Story open
+  // as bottom sheets. Sideways: the video, with the three as tabs beside it.
   const { phone, landscape } = usePhoneLayout();
+  const sheets = phone && !landscape;
   const [phoneTab, setPhoneTab] = useState<PhoneTab>(backend.agent ? "loso" : "pieces");
-  // Where the chat is, in the dock's words: on a phone it's "open" while its tab is picked.
-  const chatState = phone ? (phoneTab === "loso" ? "open" : "peek") : dock.state;
-  const openChat = useCallback(() => (phone ? setPhoneTab("loso") : dock.setState("open")), [phone, dock]);
+  const [sheet, setSheet] = useState<PhoneTab | null>(null);
+  const showPhone = useCallback((t: PhoneTab) => (sheets ? setSheet(t) : setPhoneTab(t)), [sheets]);
+  const closeSheet = useCallback(() => setSheet(null), []);
+  const [voiceOk, setVoiceOk] = useState(false);
+  useEffect(() => setVoiceOk(canUseVoice()), []);
+  const talkRef = useRef<HTMLButtonElement>(null);
+  const piecesChipRef = useRef<HTMLButtonElement>(null);
+  const storyChipRef = useRef<HTMLButtonElement>(null);
+  const shownPhoneTab = sheets ? sheet : phoneTab;
+  // Where the chat is, in the dock's words: on a phone it's "open" while its tab or sheet is up.
+  const chatState = phone ? (shownPhoneTab === "loso" ? "open" : "peek") : dock.state;
+  const openChat = useCallback(() => (phone ? showPhone("loso") : dock.setState("open")), [phone, showPhone, dock]);
   const [theme, setTheme] = useTheme();
   // In a narrow window an open chat and the pieces rail don't both fit
   // beside the video: the chat wins while it's open.
-  const railShown = phone ? phoneTab === "pieces" : railOpen && !(dock.narrow && dock.state === "open");
+  const railShown = phone ? sheets || phoneTab === "pieces" : railOpen && !(dock.narrow && dock.state === "open");
   const { message: announcement, announce } = useAnnouncer();
   const chat = useRef<ChatControl | null>(null);
   const dragTypes = useWindowFileDrag();
@@ -302,11 +324,11 @@ export function CompositorEditor({ backend }: { backend: EditorBackend }) {
   const selected = layers.find((l) => l.id === selectedId) ?? null;
 
   // Picking a piece (from the story strip) brings the rail back to edit it.
-  // On a phone that's the Pieces tab.
+  // On a phone that's the Pieces tab (or sheet).
   useEffect(() => {
     if (!selectedId) return;
     setRailOpenRaw(true);
-    if (phone) setPhoneTab("pieces");
+    if (phone) showPhone("pieces");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedId]);
   // Picking a caption opens the words-on-screen manager at that line;
@@ -985,6 +1007,17 @@ export function CompositorEditor({ backend }: { backend: EditorBackend }) {
     openChat();
     setTimeout(() => chat.current?.fill(text), 30);
   }
+  // The floating bar on an upright phone. Everything happens inside the tap:
+  // iOS only raises the keyboard (or the mic, or the file picker) for a
+  // focus or click made during the user's own gesture, so the sheet is made
+  // visible synchronously first.
+  function openChatFromBar(via: ChatOpenVia) {
+    flushSync(() => setSheet("loso"));
+    const real = (sel: string) => document.querySelector<HTMLButtonElement>(`#loso-chat ${sel}`);
+    const target = via === "mic" ? real('[data-tour="mic"]') : via === "attach" ? real('button[aria-label="Add a picture"]') : null;
+    if (target) target.click();
+    else chat.current?.focus();
+  }
 
   // Pictures arriving (paste, drop, "Point at it") and the settings sheet.
   const inbox = useLosoInbox({
@@ -1052,7 +1085,7 @@ export function CompositorEditor({ backend }: { backend: EditorBackend }) {
       onSelect: () => {
         setSelectedId(null);
         setWordsOpen(false);
-        setPhoneTab("pieces");
+        showPhone("pieces");
       },
       separated: !(renderUrl && !rendering),
     },
@@ -1408,7 +1441,9 @@ export function CompositorEditor({ backend }: { backend: EditorBackend }) {
         className={cx("relative min-h-0 flex-1", phone ? "grid" : "flex")}
         style={
           phone
-            ? landscape
+            ? sheets
+              ? { gridTemplateColumns: "minmax(0, 1fr)", gridTemplateRows: "minmax(0, 1fr)", gridTemplateAreas: '"stage"' }
+              : landscape
               ? {
                   gridTemplateColumns: "minmax(0, 1fr) minmax(280px, 44%)",
                   gridTemplateRows: "auto minmax(0, 1fr)",
@@ -1416,17 +1451,11 @@ export function CompositorEditor({ backend }: { backend: EditorBackend }) {
                   paddingRight: "env(safe-area-inset-right)",
                   paddingBottom: "env(safe-area-inset-bottom)",
                 }
-              : {
-                  gridTemplateColumns: "minmax(0, 1fr)",
-                  // The video's own shape decides how tall the stage is, up to a bit under half the screen.
-                  gridTemplateRows: `clamp(180px, calc((100vw - 24px) * ${(output.height / output.width).toFixed(4)} + 24px), 46dvh) auto minmax(0, 1fr)`,
-                  gridTemplateAreas: '"stage" "tabs" "panel"',
-                  paddingBottom: "env(safe-area-inset-bottom)",
-                }
+              : undefined
             : undefined
         }
       >
-        {phone && (
+        {phone && !sheets && (
           <PhoneTabs
             tab={phoneTab}
             setTab={setPhoneTab}
@@ -1436,7 +1465,21 @@ export function CompositorEditor({ backend }: { backend: EditorBackend }) {
             seconds={durationSec.toFixed(durationSec % 1 ? 1 : 0)}
           />
         )}
-        {/* ---- pieces rail ---- */}
+        {/* ---- pieces rail (a sheet on an upright phone) ---- */}
+        <MaybeSheet
+          sheet={
+            sheets
+              ? {
+                  id: "phone-pieces-sheet",
+                  open: sheet === "pieces",
+                  onClose: closeSheet,
+                  title: "Pieces",
+                  detail: `${layers.length} in the video`,
+                  returnFocus: () => piecesChipRef.current,
+                }
+              : null
+          }
+        >
         {railShown && (
           <aside
             id="pieces-rail"
@@ -1446,7 +1489,7 @@ export function CompositorEditor({ backend }: { backend: EditorBackend }) {
             aria-busy={agentBusy}
             className={cx(
               "flex shrink-0 flex-col overflow-y-auto transition-opacity",
-              phone ? "min-h-0 min-w-0 overscroll-contain [grid-area:panel]" : cx("border-r border-line", showWords ? "w-[380px]" : "w-[300px]"),
+              phone ? "min-h-0 min-w-0 flex-1 overscroll-contain [grid-area:panel]" : cx("border-r border-line", showWords ? "w-[380px]" : "w-[300px]"),
               agentBusy && "opacity-50"
             )}
           >
@@ -1659,6 +1702,7 @@ export function CompositorEditor({ backend }: { backend: EditorBackend }) {
             )}
           </aside>
         )}
+        </MaybeSheet>
 
         {/* ---- the stage ---- */}
         <section
@@ -1681,6 +1725,7 @@ export function CompositorEditor({ backend }: { backend: EditorBackend }) {
               ref={stageRef}
               className={cx("absolute flex items-center justify-center", phone ? "bottom-3 left-3" : "bottom-7 left-8")}
               style={{
+                ...(sheets ? { bottom: phoneDockSpace(backend.agent) } : null),
                 right: safeRight + (phone ? 12 : 32),
                 top: inbox.marking && markBarH ? markBarH + (phone ? 8 : 20) : phone ? 12 : 28,
               }}
@@ -1845,7 +1890,7 @@ export function CompositorEditor({ backend }: { backend: EditorBackend }) {
                           <Plus size={15} aria-hidden /> Add videos and photos
                         </Button>
                         {backend.folder && (
-                          <Button variant="ghost" className="h-11 px-3" onClick={() => setPhoneTab("pieces")}>
+                          <Button variant="ghost" className="h-11 px-3" onClick={() => showPhone("pieces")}>
                             Your clips
                           </Button>
                         )}
@@ -1904,7 +1949,40 @@ export function CompositorEditor({ backend }: { backend: EditorBackend }) {
 
           {!phone && storySection}
         </section>
-        {phone && phoneTab === "story" && storySection}
+        {phone &&
+          (sheets ? (
+            <PhoneSheet
+              id="phone-story-sheet"
+              open={sheet === "story"}
+              onClose={closeSheet}
+              title="Story"
+              height="50dvh"
+              detail={`${durationSec.toFixed(durationSec % 1 ? 1 : 0)} seconds · ${layers.length} ${layers.length === 1 ? "piece" : "pieces"}`}
+              returnFocus={() => storyChipRef.current}
+            >
+              {storySection}
+            </PhoneSheet>
+          ) : (
+            phoneTab === "story" && storySection
+          ))}
+        {sheets && (
+          <>
+            <PhoneDock
+              status={dockStatus}
+              agent={backend.agent}
+              sheet={sheet}
+              onChat={openChatFromBar}
+              onSheet={(t) => setSheet(t)}
+              pieces={layers.length}
+              seconds={durationSec.toFixed(durationSec % 1 ? 1 : 0)}
+              mic={voiceOk}
+              talkRef={talkRef}
+              piecesRef={piecesChipRef}
+              storyRef={storyChipRef}
+            />
+            <SheetScrim open={sheet !== null} onClose={closeSheet} />
+          </>
+        )}
 
         {/* ---- Loso, floating ---- */}
         <ChatDock
@@ -1914,7 +1992,14 @@ export function CompositorEditor({ backend }: { backend: EditorBackend }) {
           setWidth={dock.setWidth}
           status={dockStatus}
           focusInside={focusChat}
-          phone={phone ? { visible: phoneTab === "loso" } : null}
+          phone={
+            phone
+              ? {
+                  visible: shownPhoneTab === "loso",
+                  sheet: sheets ? { onClose: closeSheet, returnFocus: () => talkRef.current } : undefined,
+                }
+              : null
+          }
         >
           {(controls) =>
             backend.agent ? (

@@ -1,12 +1,14 @@
 "use client";
 
 import { useEffect, useId, useRef, useState } from "react";
-import { MoreHorizontal } from "lucide-react";
+import { ArrowUp, Mic, MoreHorizontal, Paperclip } from "lucide-react";
 import { cx } from "@/components/ui";
 import { Orb, type DockStatus } from "@/components/agent/chat-dock";
 
 // The phone editor's own bits: the "More" menu that holds the top bar's
-// actions, and the tabs under the video (Loso / Pieces / Story).
+// actions; upright, the floating bar over the video (Pieces / Story chips and
+// "Tell Loso what you want…", which opens the chat sheet); sideways, the tabs
+// beside the video (Loso / Pieces / Story).
 
 export type PhoneTab = "loso" | "pieces" | "story";
 
@@ -213,6 +215,120 @@ export function PhoneTabs({
           </button>
         );
       })}
+    </div>
+  );
+}
+
+/** Room the floating bar takes at the bottom of the stage (keep the video clear of it). */
+export function phoneDockSpace(agent: boolean) {
+  return `calc(env(safe-area-inset-bottom) + ${agent ? 122 : 62}px)`;
+}
+
+export type ChatOpenVia = "type" | "mic" | "attach";
+
+/**
+ * The floating bar on an upright phone: Pieces and Story chips, then the
+ * "Tell Loso" bar. The bar looks like the composer but isn't one: any tap
+ * on it opens the chat sheet (mic and attach go straight to the real ones).
+ */
+export function PhoneDock({
+  status,
+  agent,
+  sheet,
+  onChat,
+  onSheet,
+  pieces,
+  seconds,
+  mic,
+  talkRef,
+  piecesRef,
+  storyRef,
+}: {
+  status: DockStatus;
+  agent: boolean;
+  sheet: PhoneTab | null;
+  onChat: (via: ChatOpenVia) => void;
+  onSheet: (t: "pieces" | "story") => void;
+  pieces: number;
+  seconds: string;
+  mic: boolean;
+  talkRef: React.Ref<HTMLButtonElement>;
+  piecesRef: React.Ref<HTMLButtonElement>;
+  storyRef: React.Ref<HTMLButtonElement>;
+}) {
+  const attention = status.question || status.unread;
+  const said = status.question ? "Loso has a question" : status.unread ? "Loso replied" : null;
+  const chip = (id: "pieces" | "story", label: string, detail: string, ref: React.Ref<HTMLButtonElement>) => (
+    <button
+      ref={ref}
+      type="button"
+      data-tour={`phone-${id}`}
+      aria-haspopup="dialog"
+      aria-expanded={sheet === id}
+      aria-controls={`phone-${id}-sheet`}
+      onClick={() => onSheet(id)}
+      // 36px to look at, 44px to hit.
+      className="relative flex h-9 items-center gap-2 rounded-full border border-line-strong bg-ground/95 px-3.5 text-ink shadow-[0_12px_30px_-14px_var(--color-shade)] backdrop-blur-md transition-colors before:absolute before:-inset-1 before:content-[''] active:border-lime hover:border-edge"
+    >
+      <span className="font-mono text-[11px] uppercase tracking-[0.14em]">{label}</span>
+      <span className="font-mono text-[11px] text-ink-dim">{detail}</span>
+    </button>
+  );
+  const icon =
+    "flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-ink-dim transition-colors active:text-lime hover:text-ink";
+  return (
+    <div className="pointer-events-none absolute inset-x-0 bottom-0 z-40 flex flex-col gap-2.5 px-3 pb-[calc(env(safe-area-inset-bottom)+12px)]">
+      <div className="pointer-events-auto flex items-center gap-2 self-start">
+        {chip("pieces", "Pieces", String(pieces), piecesRef)}
+        {chip("story", "Story", `${seconds}s`, storyRef)}
+      </div>
+      {agent && (
+        <div
+          data-tour="talk"
+          className={cx(
+            "pointer-events-auto flex h-[54px] items-center rounded-full border bg-ground/95 pl-1.5 pr-1.5 shadow-[0_24px_60px_-20px_var(--color-shade)] backdrop-blur-md transition-colors",
+            attention ? "border-lime/80" : "border-edge/70"
+          )}
+        >
+          <button
+            ref={talkRef}
+            type="button"
+            onClick={() => onChat("type")}
+            aria-haspopup="dialog"
+            aria-expanded={sheet === "loso"}
+            aria-controls="loso-chat"
+            aria-label={said ? `${said}. Open Loso chat` : "Tell Loso what you want"}
+            className="flex h-11 min-w-0 flex-1 items-center gap-2.5 pl-2.5 text-left"
+          >
+            <Orb status={status} size={20} />
+            {said ? (
+              <span className="flex min-w-0 items-center gap-2 text-[15px] text-ink">
+                <span className="truncate">{said}</span>
+                <span className="h-2 w-2 shrink-0 rounded-full bg-lime-fill shadow-[0_0_0_3px_color-mix(in_oklab,var(--color-lime-fill)_25%,transparent)]" aria-hidden />
+              </span>
+            ) : (
+              <span className="truncate text-[15px] text-ink-faint">Tell Loso what you want…</span>
+            )}
+          </button>
+          <button type="button" aria-label="Add a picture for Loso" onClick={() => onChat("attach")} className={icon}>
+            <Paperclip size={17} aria-hidden />
+          </button>
+          {mic && (
+            <button type="button" data-tour="mic" aria-label="Say it to Loso" onClick={() => onChat("mic")} className={icon}>
+              <Mic size={18} aria-hidden />
+            </button>
+          )}
+          <button
+            type="button"
+            tabIndex={-1}
+            aria-hidden
+            onClick={() => onChat("type")}
+            className="ml-0.5 flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-line-strong text-ink-faint"
+          >
+            <ArrowUp size={17} />
+          </button>
+        </div>
+      )}
     </div>
   );
 }

@@ -105,11 +105,18 @@ export const editorSteps: TourStep[] = [
   },
 ];
 
+// Upright phones show the floating bar ("talk", "phone-pieces", "phone-story");
+// sideways phones show tabs ("tab-…"). Whichever isn't on screen is skipped.
 export const phoneEditorSteps: TourStep[] = [
   {
     target: "stage",
     title: "Your video",
     body: "This is your video. Tap play to watch it.",
+  },
+  {
+    target: "talk",
+    title: "Talk to Loso",
+    body: "Tap here, then write or say what you want, like “Put a big title that says SUNDAY”.",
   },
   {
     target: "tab-loso",
@@ -128,9 +135,19 @@ export const phoneEditorSteps: TourStep[] = [
     body: "This is the AI that helps Loso think. Tap it to pick a different one.",
   },
   {
+    target: "phone-pieces",
+    title: "Pieces",
+    body: "Everything in your video lives here: clips, words and sounds. Tap one to change it.",
+  },
+  {
     target: "tab-pieces",
     title: "Pieces",
     body: "Everything in your video lives here: clips, words and sounds. Tap one to change it.",
+  },
+  {
+    target: "phone-story",
+    title: "Story",
+    body: "See what comes first, and how long each piece stays.",
   },
   {
     target: "tab-story",

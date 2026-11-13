@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from "react"
 import { ChevronRight, PanelRightClose, PanelRightOpen } from "lucide-react";
 import { cx } from "@/components/ui";
 import { LosoMark } from "@/components/logo";
+import { SheetClose, SheetHandle, useSheet } from "@/components/phone-sheet";
 
 // The floating chat dock: Loso's home in the editor. It floats over the
 // right edge of the stage (the stage never reflows), and has three states:
@@ -190,18 +191,28 @@ export function ChatDock({
   /** Move focus into the chat (composer, or the recommended answer). */
   focusInside: () => void;
   /**
-   * Phones: no floating dock. The chat fills the editor's "Loso" tab (the
-   * panel under the video) and is shown while that tab is picked. The same
-   * elements stay mounted, so a running turn survives switching tabs or
-   * rotating the phone.
+   * Phones: no floating dock. Upright, the chat is a bottom sheet over the
+   * video (`sheet`), opened from the floating "Tell Loso" bar. Sideways, it
+   * fills the editor's "Loso" tab beside the video. The same elements stay
+   * mounted either way, so a running turn survives closing the sheet,
+   * switching tabs or rotating the phone.
    */
-  phone?: { visible: boolean } | null;
+  phone?: { visible: boolean; sheet?: { onClose: () => void; returnFocus?: () => HTMLElement | null | undefined } } | null;
   /** The chat. Gets the header controls (peek / close) to place in its own header. */
   children: (controls: ReactNode) => ReactNode;
 }) {
   const pillRef = useRef<HTMLButtonElement>(null);
   const spineRef = useRef<HTMLButtonElement>(null);
   const userToggled = useRef(false);
+  const asideRef = useRef<HTMLElement>(null);
+  const sheetOn = !!phone?.sheet;
+  const sheet = useSheet({
+    open: sheetOn && phone!.visible,
+    onClose: () => phone?.sheet?.onClose(),
+    panelRef: asideRef,
+    height: "82dvh",
+    returnFocus: phone?.sheet?.returnFocus,
+  });
 
   function go(next: DockState) {
     userToggled.current = true;
@@ -273,16 +284,26 @@ export function ChatDock({
   const attention = (status.question || status.unread) && state !== "open";
 
   if (phone) {
+    // One element tree for both phone layouts (only attributes change), so
+    // rotating never remounts the chat.
+    const open = phone.visible;
     return (
       <aside
+        ref={asideRef}
         id="loso-chat"
         aria-label="Loso chat"
         data-tour="chat"
-        hidden={!phone.visible}
-        className={cx("min-h-0 min-w-0 bg-ground [grid-area:panel]", phone.visible ? "flex" : "hidden")}
+        {...(sheetOn
+          ? { ...sheet.panelProps, className: sheet.className, style: { transition: sheet.transition, ...sheet.style } }
+          : {
+              hidden: !open,
+              className: cx("min-h-0 min-w-0 bg-ground [grid-area:panel]", open ? "flex" : "hidden"),
+            })}
       >
-        <div id="loso-chat-body" className="flex min-w-0 flex-1 flex-col">
-          {children(null)}
+        {sheetOn && <SheetHandle {...sheet.handleProps} />}
+        {/* 16px field on a phone: iOS zooms into anything smaller. */}
+        <div id="loso-chat-body" className="flex min-h-0 min-w-0 flex-1 flex-col [&_textarea]:text-[16px]">
+          {children(sheetOn ? <SheetClose onClose={() => phone.sheet?.onClose()} label="Close Loso chat" /> : null)}
         </div>
       </aside>
     );
