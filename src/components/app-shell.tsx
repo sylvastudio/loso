@@ -1,9 +1,10 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { LosoLogo } from "@/components/logo";
 import { usePathname } from "next/navigation";
-import { Settings2 } from "lucide-react";
+import { MessageSquareHeart, Settings2 } from "lucide-react";
 import { SettingsSheetProvider, useSettingsSheet } from "@/components/settings/settings-sheet";
 import { ThemeToggle } from "@/components/theme-toggle";
 
@@ -21,10 +22,24 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   );
 }
 
+/** Wider than a phone (Tailwind's sm). Starts wide so the server render matches desktop. */
+function useWide() {
+  const [wide, setWide] = useState(true);
+  useEffect(() => {
+    const mq = window.matchMedia("(min-width: 640px)");
+    const on = () => setWide(mq.matches);
+    on();
+    mq.addEventListener("change", on);
+    return () => mq.removeEventListener("change", on);
+  }, []);
+  return wide;
+}
+
 function Shell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const settings = useSettingsSheet();
   const editor = isEditorRoute(pathname);
+  const wide = useWide();
 
   return (
     // overflow-clip, not hidden: a hidden box can still be scrolled by focus()
@@ -37,12 +52,21 @@ function Shell({ children }: { children: React.ReactNode }) {
         Skip to content
       </a>
       {!editor && (
-        <header className="flex h-[58px] shrink-0 items-center justify-between border-b border-line px-6">
+        <header className="flex h-[58px] shrink-0 items-center justify-between gap-3 border-b border-line px-4 pt-[env(safe-area-inset-top)] sm:px-6">
           <Link href="/" className="flex items-baseline gap-2" aria-label="Loso, your videos">
             <LosoLogo size={23} />
           </Link>
-          <nav aria-label="Main" className="flex items-center gap-6">
-            <ThemeToggle showLabel />
+          <nav aria-label="Main" className="flex items-center gap-1 sm:gap-6">
+            <ThemeToggle showLabel={wide} />
+            <button
+              type="button"
+              aria-haspopup="dialog"
+              onClick={(e) => settings.open({ opener: e.currentTarget, tab: "feedback" })}
+              aria-label="Feedback"
+              className="flex min-h-11 min-w-11 items-center justify-center gap-1.5 text-[13.5px] text-ink-dim transition-colors hover:text-ink sm:min-w-0"
+            >
+              <MessageSquareHeart size={wide ? 14 : 18} aria-hidden /> <span className="hidden sm:inline">Feedback</span>
+            </button>
             {pathname.startsWith("/settings") ? (
               <span aria-current="page" className="flex min-h-10 items-center text-[13.5px] text-ink">
                 Settings
@@ -53,9 +77,10 @@ function Shell({ children }: { children: React.ReactNode }) {
                 aria-haspopup="dialog"
                 onClick={(e) => settings.open({ opener: e.currentTarget })}
                 title="Settings (⌘ ,)"
-                className="flex min-h-10 items-center gap-1.5 text-[13.5px] text-ink-dim transition-colors hover:text-ink"
+                aria-label="Settings"
+                className="flex min-h-11 min-w-11 items-center justify-center gap-1.5 text-[13.5px] text-ink-dim transition-colors hover:text-ink sm:min-w-0"
               >
-                <Settings2 size={14} aria-hidden /> Settings
+                <Settings2 size={wide ? 14 : 18} aria-hidden /> <span className="hidden sm:inline">Settings</span>
               </button>
             )}
           </nav>

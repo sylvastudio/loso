@@ -122,6 +122,21 @@ body {
   color: var(--color-ink);
   font-family: var(--font-grotesk), sans-serif;
   -webkit-font-smoothing: antialiased;
+  /* Phones: no font boost on rotate, no grey flash on tap, no double-tap zoom delay. */
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+
+/* iOS zooms the page into any field with text under 16px. On phones and
+   touch screens every typing field is at least 16px. */
+@media (max-width: 767.98px), (pointer: coarse) {
+  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="color"]):not([type="file"]),
+  textarea,
+  select {
+    font-size: max(16px, 1em) !important;
+  }
 }
 
 /* Quiet film grain */
@@ -322,4 +337,26 @@ input[type="color"]::-webkit-color-swatch {
   .onion-working .onion-f2 { transform: translate(8px, -8px); opacity: .6; }
   .onion-working .onion-f3 { transform: translate(16px, -16px); opacity: .3; }
   .onion-working .onion-dot { animation: onion-breathe 3.2s ease-in-out infinite !important; }
+}
+
+/* The mic while it listens: a soft ring and a blinking dot. */
+.mic-live {
+  animation: mic-ring 1.6s ease-out infinite;
+}
+.mic-dot {
+  animation: onion-breathe 1.2s ease-in-out infinite;
+}
+@keyframes mic-ring {
+  0% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--color-lime) 55%, transparent);
+  }
+  100% {
+    box-shadow: 0 0 0 10px transparent;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .mic-live,
+  .mic-dot {
+    animation: none;
+  }
 }

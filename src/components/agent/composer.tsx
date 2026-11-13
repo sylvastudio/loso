@@ -1,8 +1,9 @@
 "use client";
 
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState, type ReactNode } from "react";
-import { ArrowUp, Paperclip, Square, X } from "lucide-react";
+import { ArrowUp, Loader2, Mic, Paperclip, Square, X } from "lucide-react";
 import { cx } from "@/components/ui";
+import { canUseVoice, useVoice } from "./use-voice";
 
 // The chat composer: one hairline frame holding attachment chips (above),
 // an auto-growing field and the send / stop button (fixed bottom-right).
@@ -116,6 +117,28 @@ export const Composer = forwardRef<
   const ta = useRef<HTMLTextAreaElement>(null);
   const [scrolled, setScrolled] = useState(false);
   const [explain, setExplain] = useState<string | null>(null);
+  const [hasMic, setHasMic] = useState(false);
+  useEffect(() => setHasMic(canUseVoice()), []);
+  const voice = useVoice((text) => {
+    const before = value.trimEnd();
+    pendingCaret.current = null;
+    onChange(before ? `${before} ${text}` : text);
+    requestAnimationFrame(() => ta.current?.focus({ preventScroll: true }));
+  });
+  const listening = voice.state === "listening" || voice.state === "starting";
+
+  // Esc stops listening without keeping what was said.
+  useEffect(() => {
+    if (!listening) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        voice.cancel();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [listening, voice]);
 
   useImperativeHandle(ref, () => ({
     focus: () => ta.current?.focus(),
@@ -148,7 +171,7 @@ export const Composer = forwardRef<
     el.style.overflowY = el.scrollHeight > cap ? "auto" : "hidden";
   }, [value]);
 
-  const describedBy = [sendBlockedReason ? "composer-blocked" : null, explain ? "composer-explain" : null]
+  const describedBy = [sendBlockedReason ? "composer-blocked" : null, explain ? "composer-explain" : null, voice.error ? "composer-voice" : null]
     .filter(Boolean)
     .join(" ");
 
@@ -240,6 +263,26 @@ export const Composer = forwardRef<
               scrolled && "fade-top"
             )}
           />
+          {hasMic && (
+            <button
+              type="button"
+              aria-label={listening ? "Stop listening" : voice.state === "writing" ? "Writing down what you said" : "Say it instead of typing"}
+              aria-pressed={listening}
+              title={listening ? "Stop listening (Esc cancels)" : "Say it instead of typing"}
+              disabled={voice.state === "writing" || voice.state === "starting"}
+              onClick={() => {
+                voice.clearError();
+                if (listening) voice.stop();
+                else voice.start();
+              }}
+              className={cx(
+                "mb-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-full transition-colors",
+                listening ? "mic-live bg-lime-fill text-black" : "text-ink-dim hover:text-ink disabled:opacity-70"
+              )}
+            >
+              {voice.state === "writing" ? <Loader2 size={16} className="animate-spin" /> : <Mic size={16} />}
+            </button>
+          )}
           {busy && onStop ? (
             <button
               type="button"
@@ -266,6 +309,26 @@ export const Composer = forwardRef<
           )}
         </div>
       </div>
+      {(listening || voice.state === "writing") && (
+        <p role="status" className="flex items-center gap-2 px-0.5 text-[12.5px] leading-snug text-ink">
+          {listening ? (
+            <>
+              <span aria-hidden className="mic-dot h-2 w-2 rounded-full bg-lime" />
+              <span>
+                Listening… {Math.floor(voice.seconds / 60)}:{String(voice.seconds % 60).padStart(2, "0")}
+              </span>
+              <span className="text-ink-dim">Tap the mic when you&rsquo;re done. Esc cancels.</span>
+            </>
+          ) : (
+            <span className="text-ink-dim">{voice.status ?? "Writing down what you said…"}</span>
+          )}
+        </p>
+      )}
+      {voice.error && (
+        <p id="composer-voice" role="status" className="px-0.5 text-[12.5px] leading-snug text-ink-dim">
+          {voice.error}
+        </p>
+      )}
       {sendBlockedReason && (
         <p id="composer-blocked" className="px-0.5 text-[12.5px] leading-snug text-ink-dim">
           {sendBlockedReason}
@@ -276,7 +339,7 @@ export const Composer = forwardRef<
           {explain}
         </p>
       )}
-      {showHint && !sendBlockedReason && (
+      {showHint && !sendBlockedReason && !listening && voice.state !== "writing" && (
         <p className="px-0.5 text-[12px] text-ink-faint">Enter sends. Shift + Enter makes a new line.</p>
       )}
     </div>

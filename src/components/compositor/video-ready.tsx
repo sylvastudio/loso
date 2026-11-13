@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useId, useRef } from "react";
-import { Download, FolderOpen } from "lucide-react";
+import { useEffect, useId, useRef, useState } from "react";
+import { Download, FolderOpen, Share } from "lucide-react";
 import { Button, cx } from "@/components/ui";
 import { LosoMark } from "@/components/logo";
 
@@ -16,6 +16,7 @@ export function VideoReady({
   fileName,
   savedAs,
   folderName,
+  inBrowser = false,
   aspect,
   right,
   onClose,
@@ -26,6 +27,8 @@ export function VideoReady({
   /** "exports/My video.mp4" — folder projects only. */
   savedAs?: string | null;
   folderName?: string;
+  /** Kept in the browser's own storage (phones): no folder to point at. */
+  inBrowser?: boolean;
   /** width / height of the video, so the preview keeps its shape. */
   aspect: number;
   /** Space kept clear on the right for the chat dock. */
@@ -35,6 +38,22 @@ export function VideoReady({
   const ids = useId();
   const ref = useRef<HTMLDivElement>(null);
   const downloadRef = useRef<HTMLAnchorElement>(null);
+  // Phones: the share sheet is how a video gets into Photos or a chat.
+  const [shareFile, setShareFile] = useState<File | null>(null);
+  useEffect(() => {
+    if (typeof navigator.canShare !== "function") return;
+    let cancelled = false;
+    fetch(url)
+      .then((r) => r.blob())
+      .then((b) => {
+        const f = new File([b], fileName, { type: b.type || "video/mp4" });
+        if (!cancelled && navigator.canShare({ files: [f] })) setShareFile(f);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [url, fileName]);
 
   useEffect(() => {
     downloadRef.current?.focus();
@@ -67,7 +86,7 @@ export function VideoReady({
   const tall = aspect < 1;
 
   return (
-    <div className="absolute inset-y-0 left-0 z-[60] flex items-center justify-center p-4" style={{ right }}>
+    <div className="absolute inset-y-0 left-0 z-[60] flex items-center justify-center p-2 sm:p-4" style={{ right }}>
       <div className="absolute inset-0 bg-scrim" aria-hidden onPointerDown={onClose} />
       <div
         ref={ref}
@@ -77,7 +96,7 @@ export function VideoReady({
         aria-describedby={`${ids}-d`}
         onKeyDown={trap}
         className={cx(
-          "rise relative flex max-h-full w-full flex-col gap-5 overflow-y-auto border border-line-strong bg-ground p-6 shadow-[0_30px_90px_-20px_var(--color-shade)]",
+          "rise relative flex max-h-full w-full flex-col gap-5 overflow-y-auto overscroll-contain border border-line-strong bg-ground p-4 sm:p-6 shadow-[0_30px_90px_-20px_var(--color-shade)]",
           tall ? "max-w-[620px] sm:flex-row sm:items-stretch" : "max-w-[640px]"
         )}
         style={{ borderRadius: 2 }}
@@ -90,7 +109,7 @@ export function VideoReady({
             playsInline
             preload="metadata"
             aria-label="Your finished video"
-            className="block max-h-[56vh] w-full object-contain"
+            className="block max-h-[40dvh] w-full object-contain sm:max-h-[56vh]"
             style={{ aspectRatio: String(aspect) }}
           />
         </div>
@@ -108,7 +127,8 @@ export function VideoReady({
           </h2>
           <div id={`${ids}-d`} className="mt-3 flex flex-col gap-2 text-[14px] leading-relaxed text-ink-dim">
             <p>Your video is ready. Play it here, or download it to share.</p>
-            {savedAs && (
+            {savedAs && inBrowser && <p>It&rsquo;s kept in Loso on {folderName?.toLowerCase() ?? "this device"} too.</p>}
+            {savedAs && !inBrowser && (
               <p className="flex items-start gap-1.5">
                 <FolderOpen size={14} className="mt-[4px] shrink-0" aria-hidden />
                 <span className="min-w-0">
@@ -119,11 +139,23 @@ export function VideoReady({
             )}
           </div>
           <div className="mt-auto flex flex-wrap items-center gap-3 pt-6">
+            {shareFile && (
+              <button
+                type="button"
+                onClick={() => navigator.share({ files: [shareFile], title: fileName.replace(/\.mp4$/, "") }).catch(() => {})}
+                className="inline-flex h-11 items-center justify-center gap-2 whitespace-nowrap rounded-full bg-lime-fill px-5 text-sm font-semibold text-black transition-colors hover:bg-lime-deep"
+              >
+                <Share size={15} aria-hidden /> Save or share
+              </button>
+            )}
             <a
               ref={downloadRef}
               href={url}
               download={fileName}
-              className="inline-flex h-10 items-center justify-center gap-2 whitespace-nowrap rounded-full bg-lime-fill px-5 text-sm font-semibold text-black transition-colors hover:bg-lime-deep"
+              className={cx(
+                "inline-flex h-11 items-center justify-center gap-2 whitespace-nowrap rounded-full px-5 text-sm font-semibold transition-colors",
+                shareFile ? "border border-edge text-ink hover:border-lime" : "bg-lime-fill text-black hover:bg-lime-deep"
+              )}
             >
               <Download size={15} aria-hidden /> Download
             </a>

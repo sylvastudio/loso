@@ -52,7 +52,13 @@ export interface EditorBackend {
   fetchLatest?(): Promise<{ updatedAt: number; doc: CompositorDoc | undefined }>;
   templates: TemplateBackend;
   /** The project's folder: clips that can be added without copying. */
-  folder?: { name: string; list(): Promise<FolderEntry[]>; refFor(entry: FolderEntry): string };
+  folder?: {
+    name: string;
+    /** Kept in the browser's own storage (phones), not a folder the user can see. */
+    inBrowser?: boolean;
+    list(): Promise<FolderEntry[]>;
+    refFor(entry: FolderEntry): string;
+  };
   /** Keep a picture beside the project, out of the video (local: the folder's notes/). Returns where. */
   saveNote?(name: string, data: Blob): Promise<string>;
   /** The studio agent runs on this backend. */

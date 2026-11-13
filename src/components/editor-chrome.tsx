@@ -48,7 +48,16 @@ export function EditableTitle({
 
 export type SaveState = "idle" | "dirty" | "saving" | "saved" | "error";
 
-export function SaveStatus({ state, onRetry }: { state: SaveState; onRetry?: () => void }) {
+export function SaveStatus({
+  state,
+  onRetry,
+  compact = false,
+}: {
+  state: SaveState;
+  onRetry?: () => void;
+  /** Phones: just the dot (the word is kept for screen readers). */
+  compact?: boolean;
+}) {
   if (state === "idle") return null;
   if (state === "error") {
     return (
@@ -58,7 +67,7 @@ export function SaveStatus({ state, onRetry }: { state: SaveState; onRetry?: () 
         className="min-h-8 text-[12.5px] text-danger underline-offset-2 hover:underline"
         role="alert"
       >
-        Couldn&rsquo;t save. Try again
+        {compact ? "Retry save" : <>Couldn&rsquo;t save. Try again</>}
       </button>
     );
   }
@@ -70,24 +79,35 @@ export function SaveStatus({ state, onRetry }: { state: SaveState; onRetry?: () 
         aria-hidden
         className={cx("h-1.5 w-1.5 rounded-full", state === "saved" ? "bg-lime/70" : "bg-ink-faint")}
       />
-      {state === "saved" ? "Saved" : "Saving…"}
+      <span className={cx(compact && "sr-only")}>{state === "saved" ? "Saved" : "Saving…"}</span>
     </span>
   );
 }
 
-// ---------- Narrow-window notice ----------
-// Below 768px the editor doesn't fit: say so kindly, and how to fix it.
+// ---------- Phone layout ----------
+// Phones (and very narrow windows) get the stage-first editor: the video on
+// top, Loso / Pieces / Story as tabs below it. A phone turned sideways keeps
+// it too, with the tabs beside the video.
 
-export function NarrowScreenNote() {
-  return (
-    <div role="note" className="flex items-start gap-3 border-b border-line bg-panel px-5 py-3 md:hidden">
-      <span aria-hidden className="mt-1.5 h-2 w-2 shrink-0 rounded-full bg-lime" />
-      <p className="text-[14px] leading-snug text-ink">
-        <span className="font-serif text-[17px] italic">Loso needs a bigger screen.</span>{" "}
-        <span className="text-ink-dim">
-          Use Chrome or Edge on a computer, or make this window wider, to see your video and Loso side by side.
-        </span>
-      </p>
-    </div>
-  );
+const PHONE_QUERY = "(max-width: 767.98px), (max-height: 500px) and (pointer: coarse)";
+const LANDSCAPE_QUERY = "(orientation: landscape)";
+
+const matches = (q: string) => typeof window !== "undefined" && window.matchMedia(q).matches;
+
+export function usePhoneLayout() {
+  // The editor mounts on the client only, so the first render can read the window.
+  const [state, setState] = useState(() => ({ phone: matches(PHONE_QUERY), landscape: matches(LANDSCAPE_QUERY) }));
+  useEffect(() => {
+    const a = window.matchMedia(PHONE_QUERY);
+    const b = window.matchMedia(LANDSCAPE_QUERY);
+    const on = () => setState({ phone: a.matches, landscape: b.matches });
+    on();
+    a.addEventListener("change", on);
+    b.addEventListener("change", on);
+    return () => {
+      a.removeEventListener("change", on);
+      b.removeEventListener("change", on);
+    };
+  }, []);
+  return state;
 }

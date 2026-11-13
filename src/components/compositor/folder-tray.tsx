@@ -39,7 +39,7 @@ export function FolderTray({
     <section aria-labelledby="folder-h" className="flex flex-col gap-2.5">
       <div className="flex items-center justify-between">
         <h2 id="folder-h" className="font-mono text-[11px] uppercase tracking-[0.12em] text-ink-dim">
-          In your folder
+          {folder.inBrowser ? "Your clips" : "In your folder"}
         </h2>
         <button
           type="button"
@@ -54,7 +54,9 @@ export function FolderTray({
       {error && <p role="alert" className="text-[13px] text-danger">{error}</p>}
       {entries?.length === 0 && (
         <p className="text-[13px] leading-relaxed text-ink-dim">
-          No videos, pictures or sounds in “{folder.name}” yet. Put files in the folder, or drop them anywhere here.
+          {folder.inBrowser
+            ? "No videos, pictures or sounds yet. Add some with the button above."
+            : `No videos, pictures or sounds in “${folder.name}” yet. Put files in the folder, or drop them anywhere here.`}
         </p>
       )}
       <div className="flex max-h-[240px] flex-col overflow-y-auto border-t border-line">
@@ -68,7 +70,7 @@ export function FolderTray({
               onClick={() => onAdd(e)}
               title={`Put ${e.path} in the video`}
               className={cx(
-                "flex min-h-10 min-w-0 shrink-0 items-center gap-2.5 border-b border-line text-left text-[13.5px] transition-colors hover:text-lime",
+                "flex min-h-11 min-w-0 shrink-0 items-center gap-2.5 border-b border-line text-left text-[13.5px] transition-colors hover:text-lime",
                 inUse ? "text-ink" : "text-ink-dim"
               )}
             >

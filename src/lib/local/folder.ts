@@ -42,12 +42,18 @@ type PermissionHandle = FileSystemDirectoryHandle & {
   requestPermission(o: { mode: "readwrite" }): Promise<PermissionState>;
 };
 
-export function folderPermission(h: FileSystemDirectoryHandle): Promise<PermissionState> {
-  return (h as PermissionHandle).queryPermission({ mode: "readwrite" });
+// Folders inside the browser's own storage (OPFS, used on phones) have no
+// permission prompt: Safari doesn't even have these methods. Always granted.
+export async function folderPermission(h: FileSystemDirectoryHandle): Promise<PermissionState> {
+  const ph = h as Partial<PermissionHandle>;
+  if (typeof ph.queryPermission !== "function") return "granted";
+  return ph.queryPermission({ mode: "readwrite" });
 }
 
 export async function requestFolderPermission(h: FileSystemDirectoryHandle): Promise<boolean> {
-  return (await (h as PermissionHandle).requestPermission({ mode: "readwrite" })) === "granted";
+  const ph = h as Partial<PermissionHandle>;
+  if (typeof ph.requestPermission !== "function") return true;
+  return (await ph.requestPermission({ mode: "readwrite" })) === "granted";
 }
 
 export function mediaKind(name: string): MediaKind | null {
@@ -112,9 +118,63 @@ export async function writeFile(
   path: string,
   data: Blob | string
 ): Promise<void> {
-  const w = await (await fileAt(dir, path, true)).createWritable();
-  await w.write(data);
-  await w.close();
+  const handle = await fileAt(dir, path, true);
+  if (typeof (handle as Partial<FileSystemFileHandle>).createWritable === "function") {
+    const w = await handle.createWritable();
+    await w.write(data);
+    await w.close();
+    return;
+  }
+  // Older iOS Safari (before 26): browser storage can only be written from a
+  // worker, through a sync access handle.
+  await writeViaWorker(handle, data);
+}
+
+const WRITE_WORKER = `
+self.onmessage = async (e) => {
+  const { path, data } = e.data;
+  try {
+    let d = await navigator.storage.getDirectory();
+    for (const p of path.slice(0, -1)) d = await d.getDirectoryHandle(p, { create: true });
+    const fh = await d.getFileHandle(path[path.length - 1], { create: true });
+    const h = await fh.createSyncAccessHandle();
+    try {
+      h.truncate(0);
+      const blob = typeof data === "string" ? new Blob([data]) : data;
+      const CHUNK = 8 * 1024 * 1024;
+      for (let at = 0; at < blob.size; at += CHUNK) {
+        const buf = new Uint8Array(await blob.slice(at, at + CHUNK).arrayBuffer());
+        h.write(buf, { at });
+      }
+      h.flush();
+    } finally {
+      h.close();
+    }
+    self.postMessage({ ok: true });
+  } catch (err) {
+    self.postMessage({ ok: false, name: err && err.name, message: String((err && err.message) || err) });
+  }
+};`;
+
+async function writeViaWorker(handle: FileSystemFileHandle, data: Blob | string): Promise<void> {
+  const root = await navigator.storage.getDirectory();
+  const path = await root.resolve(handle);
+  if (!path) throw new Error("This browser can't save files here.");
+  const url = URL.createObjectURL(new Blob([WRITE_WORKER], { type: "text/javascript" }));
+  const worker = new Worker(url);
+  try {
+    await new Promise<void>((resolve, reject) => {
+      worker.onmessage = (e: MessageEvent<{ ok: boolean; name?: string; message?: string }>) => {
+        if (e.data.ok) resolve();
+        else reject(Object.assign(new Error(e.data.message), { name: e.data.name ?? "Error" }));
+      };
+      worker.onerror = (e) => reject(new Error(e.message || "Couldn't save the file."));
+      worker.postMessage({ path, data });
+    });
+  } finally {
+    worker.terminate();
+    URL.revokeObjectURL(url);
+  }
 }
 
 export async function readText(dir: FileSystemDirectoryHandle, path: string, maxBytes = Infinity): Promise<string | null> {

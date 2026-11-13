@@ -40,6 +40,12 @@ export const metadata: Metadata = {
 };
 
 export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  // Android: shrink the page when the keyboard opens so the chat box stays
+  // in view. (No viewport-fit=cover: the app header doesn't pad for the
+  // notch, so the browser keeps the page inside the safe area.)
+  interactiveWidget: "resizes-content",
   themeColor: [
     { media: "(prefers-color-scheme: dark)", color: "#0b0b0c" },
     { media: "(prefers-color-scheme: light)", color: "#f2eee3" },

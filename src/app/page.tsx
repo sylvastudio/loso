@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { ArrowRight, FolderOpen, X } from "lucide-react";
+import { ArrowRight, FolderOpen, ImagePlus, Smartphone, X } from "lucide-react";
 import { Thumbnail } from "@remotion/player";
 import { Button, Field, InlineError, Input, cx } from "@/components/ui";
 import { LosoMark } from "@/components/logo";
@@ -11,14 +11,17 @@ import { CompositorComposition } from "@/remotion/compositor";
 import { mediaRefs, resolveDocWith, type CompositorDoc, type ResolvedCompositorDoc } from "@/lib/compositor";
 import { folderAccessSupported, folderPermission, listFiles, pickFolder, requestFolderPermission } from "@/lib/local/folder";
 import { localAssetUrls } from "@/lib/local/assets";
-import { idbPut } from "@/lib/local/db";
 import { moveServerProject } from "@/lib/local/migrate";
 import {
   PROJECT_EXT,
   adoptLocalProject,
   askProjectAccess,
+  createBrowserProject,
   createLocalProject,
+  deleteBrowserProject,
   forgetLocalProject,
+  putProjectRecord,
+  sweepBrowserProjects,
   listLocalProjects,
   openLocalProject,
   projectAccess,
@@ -336,6 +339,10 @@ export default function ProjectsPage() {
   const [dropOver, setDropOver] = useState(false);
   const [needsAllow, setNeedsAllow] = useState<FileSystemDirectoryHandle | null>(null);
   const [copied, setCopied] = useState(false);
+  const [adding, setAdding] = useState<string | null>(null);
+  const pickRef = useRef<HTMLInputElement>(null);
+  const removedRef = useRef<LocalProjectRecord | null>(null);
+  removedRef.current = removed;
   const removeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const toastHold = useRef(false);
 
@@ -349,7 +356,31 @@ export default function ProjectsPage() {
   useEffect(() => {
     setSupported(folderAccessSupported());
     refresh().catch((e: Error) => setError(e.message));
+    // Clear out phone projects whose removal was never finished (tab closed during Undo).
+    listLocalProjects()
+      .then((list) => sweepBrowserProjects(new Set(list.filter((r) => r.storage === "browser").map((r) => r.id))))
+      .catch(() => {});
   }, [refresh]);
+
+  // Phones (no folder picker): the picked videos and photos are copied into
+  // a project kept in this browser's own storage.
+  async function startFromFiles(list: FileList | null) {
+    const files = Array.from(list ?? []);
+    if (!files.length) return;
+    setError(null);
+    setAdding("Getting ready…");
+    try {
+      const record = await createBrowserProject("My video", files, (i, n, name) =>
+        setAdding(n > 1 ? `Adding ${i} of ${n}: ${name}` : `Adding ${name}`)
+      );
+      router.push(`/edit?id=${record.id}`);
+    } catch (e) {
+      setError(`Couldn't add those files. ${(e as Error).message}`);
+      setAdding(null);
+    } finally {
+      if (pickRef.current) pickRef.current.value = "";
+    }
+  }
 
   // Dev-only hook for automated checks, which can't click the native folder
   // picker: the browser's private file system stands in for a real folder.
@@ -434,15 +465,24 @@ export default function ProjectsPage() {
     router.push(`/edit?id=${r.id}`);
   }
 
+  // The Undo window is over: a project kept in this browser is deleted for
+  // good (a folder project's file always stays in its folder).
+  function finishRemoval() {
+    const r = removedRef.current;
+    if (r?.storage === "browser") deleteBrowserProject(r.id).catch(() => {});
+    setRemoved(null);
+  }
+
   function armToastTimer() {
     if (removeTimer.current) clearTimeout(removeTimer.current);
     removeTimer.current = setTimeout(() => {
-      if (!toastHold.current) setRemoved(null);
+      if (!toastHold.current) finishRemoval();
       else armToastTimer();
     }, 20000);
   }
 
   async function remove(r: LocalProjectRecord) {
+    finishRemoval(); // an earlier removal can't be undone any more
     await forgetLocalProject(r.id);
     setRemoved(r);
     armToastTimer();
@@ -451,7 +491,7 @@ export default function ProjectsPage() {
 
   async function undoRemove() {
     if (!removed) return;
-    await idbPut("projects", removed.id, removed);
+    await putProjectRecord(removed);
     setRemoved(null);
     refresh();
   }
@@ -460,7 +500,7 @@ export default function ProjectsPage() {
 
   return (
     <div
-      className="relative mx-auto max-w-5xl px-8 pb-24"
+      className="relative mx-auto max-w-5xl px-5 pb-[calc(6rem+env(safe-area-inset-bottom))] sm:px-8"
       onDragOver={(e) => {
         if (!supported || !e.dataTransfer.types.includes("Files")) return;
         e.preventDefault();
@@ -472,7 +512,7 @@ export default function ProjectsPage() {
       onDrop={(e) => supported && onDrop(e)}
     >
       {/* ---- hero ---- */}
-      <header className={cx("border-b border-line", hasProjects ? "pb-10 pt-12" : "pb-14 pt-16")}>
+      <header className={cx("border-b border-line", hasProjects ? "pb-9 pt-9 sm:pb-10 sm:pt-12" : "pb-10 pt-10 sm:pb-14 sm:pt-16")}>
         <p className="rise mb-5 font-mono text-[11px] uppercase tracking-[0.14em] text-ink-dim">Tell it the video you want</p>
         <h1
           className={cx(
@@ -520,26 +560,51 @@ export default function ProjectsPage() {
             </div>
           </div>
         ) : (
-          <div className="rise mt-10 max-w-xl border-l-2 border-lime pl-5" style={{ animationDelay: "120ms" }}>
-            <p className="font-serif text-[22px] italic leading-snug text-ink">Open Loso in Chrome or Edge on a computer.</p>
-            <p className="mt-2 text-[14px] leading-relaxed text-ink-dim">
-              Loso opens your folder right on your machine, and only those browsers can do that. Phones and iPads
-              can&rsquo;t yet.
+          <div className="rise mt-9" style={{ animationDelay: "120ms" }}>
+            <input
+              ref={pickRef}
+              type="file"
+              accept="video/*,image/*"
+              multiple
+              hidden
+              onChange={(e) => startFromFiles(e.target.files)}
+            />
+            <div className="flex flex-col gap-5 border border-dashed border-edge/70 px-5 py-5 sm:flex-row sm:items-center sm:px-6 sm:py-6">
+              <div className="min-w-0 flex-1">
+                <p className="font-serif text-[22px] italic leading-snug text-ink">Start with your clips</p>
+                <p className="mt-1 text-[14px] leading-relaxed text-ink-dim">
+                  Pick the videos and photos for this one. Loso keeps them right here on this device. Nothing is uploaded.
+                </p>
+              </div>
+              <Button
+                onClick={() => pickRef.current?.click()}
+                disabled={!!adding}
+                className="h-14 w-full shrink-0 px-6 text-[16px] sm:h-12 sm:w-auto sm:text-[15px]"
+              >
+                {adding ? <LosoMark working size={18} /> : <ImagePlus size={17} aria-hidden />}
+                {adding ? "Adding…" : "Pick videos and photos"}
+              </Button>
+            </div>
+            <p role="status" className="mt-2 min-h-[20px] truncate text-[13.5px] text-lime">
+              {adding ?? ""}
             </p>
-            <Button
-              variant="outline"
-              className="mt-4"
-              onClick={async () => {
-                try {
-                  await navigator.clipboard.writeText(window.location.href);
-                  setCopied(true);
-                } catch {
-                  setCopied(false);
-                }
-              }}
-            >
-              {copied ? "Copied. Paste it into Chrome" : "Copy this link"}
-            </Button>
+            <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[13px] leading-relaxed text-ink-dim">
+              <span>On a computer? Chrome or Edge can work straight in a folder.</span>
+              <button
+                type="button"
+                className="min-h-11 text-ink underline decoration-line-strong underline-offset-4 transition-colors hover:text-lime"
+                onClick={async () => {
+                  try {
+                    await navigator.clipboard.writeText(window.location.href);
+                    setCopied(true);
+                  } catch {
+                    setCopied(false);
+                  }
+                }}
+              >
+                {copied ? "Link copied" : "Copy the link"}
+              </button>
+            </div>
           </div>
         )}
 
@@ -596,7 +661,9 @@ export default function ProjectsPage() {
         )}
         {projects !== null && projects.length === 0 && (
           <p className="mt-4 max-w-md text-[14px] leading-relaxed text-ink-dim">
-            None yet. Open the folder with your clips and your first video starts there.
+            {supported
+              ? "None yet. Open the folder with your clips and your first video starts there."
+              : "None yet. Pick your videos and photos and your first video starts there."}
           </p>
         )}
         {hasProjects && (
@@ -608,9 +675,9 @@ export default function ProjectsPage() {
                   <button
                     type="button"
                     onClick={() => openProject(p)}
-                    className="flex min-w-0 flex-1 items-center gap-5 py-3 text-left"
+                    className="flex min-h-[72px] min-w-0 flex-1 items-center gap-3 py-3 text-left sm:gap-5"
                   >
-                    <span className="w-6 shrink-0 font-mono text-[12px] text-ink-dim">{String(i + 1).padStart(2, "0")}</span>
+                    <span className="hidden w-6 shrink-0 font-mono text-[12px] text-ink-dim sm:block">{String(i + 1).padStart(2, "0")}</span>
                     <span
                       className="relative block h-14 shrink-0 overflow-hidden bg-stage outline outline-1 outline-line-strong transition-[outline-color] group-hover:outline-lime/70"
                       style={{ aspectRatio: `${p.width} / ${p.height}` }}
@@ -622,9 +689,18 @@ export default function ProjectsPage() {
                       <span className="block truncate font-serif text-[21px] italic leading-tight tracking-tight text-ink transition-colors group-hover:text-lime">
                         {p.title}
                       </span>
-                      <span className="mt-0.5 flex items-center gap-1.5 text-[12.5px] text-ink-dim">
-                        <FolderOpen size={12} aria-hidden /> {p.folderName}
-                        {!granted && <span className="text-ink-dim">· click to let Loso open the folder</span>}
+                      <span className="mt-0.5 flex min-w-0 items-center gap-1.5 text-[12.5px] text-ink-dim">
+                        {p.storage === "browser" ? (
+                          <Smartphone size={12} aria-hidden className="shrink-0" />
+                        ) : (
+                          <FolderOpen size={12} aria-hidden className="shrink-0" />
+                        )}
+                        <span className="truncate">{p.folderName}</span>
+                        {!granted && (
+                          <span className="hidden truncate text-ink-dim sm:inline">
+                            {p.storage === "browser" ? "· this browser cleared it" : "· click to let Loso open the folder"}
+                          </span>
+                        )}
                       </span>
                     </span>
                     <span className="hidden shrink-0 text-right text-[12.5px] text-ink-dim sm:block">
@@ -633,9 +709,17 @@ export default function ProjectsPage() {
                     <ArrowRight size={16} className="shrink-0 text-ink-dim transition-colors group-hover:text-lime" aria-hidden />
                   </button>
                   <button
-                    aria-label={`Remove ${p.title} from this list (the file stays in your folder)`}
-                    title="Remove from this list (the file stays in your folder)"
-                    className="ml-2 flex h-10 w-10 shrink-0 items-center justify-center text-ink-dim opacity-60 transition-opacity hover:text-danger hover:opacity-100 focus-visible:opacity-100"
+                    aria-label={
+                      p.storage === "browser"
+                        ? `Delete ${p.title} from ${p.folderName.toLowerCase()}`
+                        : `Remove ${p.title} from this list (the file stays in your folder)`
+                    }
+                    title={
+                      p.storage === "browser"
+                        ? "Delete (you can undo for a moment)"
+                        : "Remove from this list (the file stays in your folder)"
+                    }
+                    className="ml-1 flex h-11 w-11 shrink-0 items-center justify-center text-ink-dim opacity-60 transition-opacity hover:text-danger hover:opacity-100 focus-visible:opacity-100"
                     onClick={() => remove(p)}
                   >
                     <X size={15} />
@@ -654,7 +738,7 @@ export default function ProjectsPage() {
       {/* Undo toast for removals: 20s, held while hovered or focused */}
       <div
         className={cx(
-          "pointer-events-none fixed inset-x-0 bottom-0 z-40 flex justify-center pb-6 transition-all duration-300",
+          "pointer-events-none fixed inset-x-0 bottom-0 z-40 flex justify-center px-3 pb-[calc(1.5rem+env(safe-area-inset-bottom))] transition-all duration-300",
           removed ? "translate-y-0 opacity-100" : "translate-y-4 opacity-0"
         )}
         aria-live="polite"
@@ -665,10 +749,12 @@ export default function ProjectsPage() {
             onMouseLeave={() => (toastHold.current = false)}
             onFocus={() => (toastHold.current = true)}
             onBlur={() => (toastHold.current = false)}
-            className="pointer-events-auto flex items-center gap-4 border border-line-strong bg-ground/95 py-2 pl-5 pr-2 backdrop-blur-md"
+            className="pointer-events-auto flex min-w-0 max-w-full items-center gap-3 border border-line-strong bg-ground/95 py-2 pl-4 pr-2 backdrop-blur-md sm:gap-4 sm:pl-5"
           >
-            <span className="max-w-[340px] truncate text-[13.5px] text-ink-dim">
-              Removed <span className="font-serif italic text-ink">{removed.title}</span> · the file stays in your folder
+            <span className="min-w-0 max-w-[340px] truncate text-[13.5px] text-ink-dim">
+              {removed.storage === "browser" ? "Deleted" : "Removed"}{" "}
+              <span className="font-serif italic text-ink">{removed.title}</span>
+              {removed.storage === "browser" ? "" : " · the file stays in your folder"}
             </span>
             <Button size="sm" onClick={undoRemove}>
               Undo
@@ -676,8 +762,8 @@ export default function ProjectsPage() {
             <button
               type="button"
               aria-label="Dismiss"
-              onClick={() => setRemoved(null)}
-              className="flex h-9 w-9 items-center justify-center text-ink-dim hover:text-ink"
+              onClick={finishRemoval}
+              className="flex h-11 w-11 items-center justify-center text-ink-dim hover:text-ink"
             >
               <X size={14} />
             </button>

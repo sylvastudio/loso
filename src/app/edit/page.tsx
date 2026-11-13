@@ -59,13 +59,14 @@ function EditInner() {
     (async () => {
       const record = await getLocalProject(id);
       if (!record) return setState({ kind: "missing" });
-      if ((await projectAccess(record)) === "granted") await open(record);
+      // Browser-stored (phone) projects need no permission; open() explains a cleared one.
+      if (record.storage === "browser" || (await projectAccess(record)) === "granted") await open(record);
       else setState({ kind: "needs-access", record });
     })();
   }, [id, open]);
 
   const back = (
-    <Link href="/" className="text-[13px] text-ink-dim transition-colors hover:text-lime">
+    <Link href="/" className="flex min-h-11 items-center text-[13px] text-ink-dim transition-colors hover:text-lime">
       ← All projects
     </Link>
   );
@@ -88,7 +89,7 @@ function EditInner() {
       return <ErrorState detail={state.message}>{back}</ErrorState>;
     case "needs-access":
       return (
-        <div className="mx-auto flex max-w-md flex-col items-start gap-5 px-8 py-24">
+        <div className="mx-auto flex max-w-md flex-col items-start gap-5 px-5 py-16 sm:px-8 sm:py-24">
           <p className="micro">Permission needed</p>
           <h1 className="font-serif text-[30px] italic leading-tight tracking-tight">{state.record.title}</h1>
           <p className="text-[13.5px] leading-relaxed text-ink-dim">

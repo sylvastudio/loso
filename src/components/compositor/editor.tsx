@@ -27,10 +27,17 @@ import {
   Type as TypeIcon,
   Undo2,
   Settings2,
+  PenLine,
+  Monitor,
+  Sun,
+  Moon,
+  LayoutGrid,
 } from "lucide-react";
 import { Button, InlineError, Select, cx } from "@/components/ui";
 import { FontLoader } from "@/components/font-loader";
-import { EditableTitle, NarrowScreenNote, SaveStatus, type SaveState } from "@/components/editor-chrome";
+import { EditableTitle, SaveStatus, usePhoneLayout, type SaveState } from "@/components/editor-chrome";
+import { PhoneMenu, PhoneTabs, type MenuItem, type PhoneTab } from "@/components/compositor/phone-bar";
+import { THEMES, THEME_LABEL, useTheme } from "@/lib/theme";
 import { ChatPanel, STARTERS, type ChatControl } from "@/components/agent/chat-panel";
 import { ChatDock, IDLE_STATUS, dockSafeArea, useAnnouncer, useDockState, type DockStatus } from "@/components/agent/chat-dock";
 import { TemplatesSection } from "@/components/compositor/templates-section";
@@ -239,9 +246,17 @@ export function CompositorEditor({ backend }: { backend: EditorBackend }) {
   // updatedAt of the newest saved copy we know about (ours or adopted)
   const lastSeen = useRef(backend.updatedAt);
   const dock = useDockState(backend.projectId);
+  // Phones: the video on top and Loso / Pieces / Story as tabs below it
+  // (no floating dock, no side rail).
+  const { phone, landscape } = usePhoneLayout();
+  const [phoneTab, setPhoneTab] = useState<PhoneTab>(backend.agent ? "loso" : "pieces");
+  // Where the chat is, in the dock's words: on a phone it's "open" while its tab is picked.
+  const chatState = phone ? (phoneTab === "loso" ? "open" : "peek") : dock.state;
+  const openChat = useCallback(() => (phone ? setPhoneTab("loso") : dock.setState("open")), [phone, dock]);
+  const [theme, setTheme] = useTheme();
   // In a narrow window an open chat and the pieces rail don't both fit
   // beside the video: the chat wins while it's open.
-  const railShown = railOpen && !(dock.narrow && dock.state === "open");
+  const railShown = phone ? phoneTab === "pieces" : railOpen && !(dock.narrow && dock.state === "open");
   const { message: announcement, announce } = useAnnouncer();
   const chat = useRef<ChatControl | null>(null);
   const dragTypes = useWindowFileDrag();
@@ -273,8 +288,12 @@ export function CompositorEditor({ backend }: { backend: EditorBackend }) {
   const selected = layers.find((l) => l.id === selectedId) ?? null;
 
   // Picking a piece (from the story strip) brings the rail back to edit it.
+  // On a phone that's the Pieces tab.
   useEffect(() => {
-    if (selectedId) setRailOpenRaw(true);
+    if (!selectedId) return;
+    setRailOpenRaw(true);
+    if (phone) setPhoneTab("pieces");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedId]);
   // Picking a caption opens the words-on-screen manager at that line;
   // picking anything else goes back to the usual inspector.
@@ -375,7 +394,7 @@ export function CompositorEditor({ backend }: { backend: EditorBackend }) {
   // ---- measure the stage's safe area for scaling ----
   // The dock floats over the stage (no reflow); the frame centres in the
   // space left of it.
-  const safeRight = dockSafeArea(dock.state, dock.width);
+  const safeRight = phone ? 0 : dockSafeArea(dock.state, dock.width);
   useEffect(() => {
     const el = stageRef.current;
     if (!el) return;
@@ -838,9 +857,25 @@ export function CompositorEditor({ backend }: { backend: EditorBackend }) {
 
   async function exportVideo(): Promise<{ savedAs?: string; error?: string }> {
     setError(null);
+    // Making the MP4 needs the browser's video encoder (WebCodecs). Say so
+    // plainly instead of failing halfway on browsers that don't have it.
+    if (typeof window !== "undefined" && !("VideoEncoder" in window)) {
+      const msg = phone
+        ? "This phone's browser can't make video files yet. Update your phone, or try Chrome."
+        : "This browser can't make video files. Use Chrome or Edge.";
+      setError(msg);
+      return { error: msg };
+    }
     setRendering(true);
+    // Keep the screen on while it works: a phone that locks pauses the tab.
+    let wake: { release(): Promise<void> } | null = null;
+    try {
+      wake = await (navigator as Navigator & { wakeLock?: { request(t: "screen"): Promise<{ release(): Promise<void> }> } }).wakeLock?.request("screen") ?? null;
+    } catch {
+      wake = null;
+    }
     lastQuarter.current = -1;
-    announce("Making the video. Keep this tab open.");
+    announce(phone ? "Making the video. Keep Loso open and the screen on." : "Making the video. Keep this tab open.");
     try {
       // Render reads the saved doc, so make sure the latest edit is saved first.
       if (!(await flush())) throw new Error("Couldn't save your latest changes, so making the video was stopped.");
@@ -850,12 +885,20 @@ export function CompositorEditor({ backend }: { backend: EditorBackend }) {
       setSavedAs(d.savedAs ?? null);
       setRenderedDoc(exported);
       setReady({ url: d.url, savedAs: d.savedAs ?? null });
-      announce(`Done. Your video is ready.${d.savedAs ? ` It's saved in your folder as ${d.savedAs}.` : ""}`);
+      announce(
+        `Done. Your video is ready.${d.savedAs && !backend.folder?.inBrowser ? ` It's saved in your folder as ${d.savedAs}.` : ""}`
+      );
       return { savedAs: d.savedAs ?? undefined };
     } catch (e) {
-      setError((e as Error).message);
-      return { error: (e as Error).message };
+      const raw = (e as Error).message;
+      // Phones run out of memory on long or big videos; say what to try.
+      const msg = phone
+        ? `${raw} Phones can struggle with long or big videos: try a shorter one, or close other apps and try again.`
+        : raw;
+      setError(msg);
+      return { error: msg };
     } finally {
+      wake?.release().catch(() => {});
       setRendering(false);
       setRenderProgress(null);
     }
@@ -887,17 +930,16 @@ export function CompositorEditor({ backend }: { backend: EditorBackend }) {
 
   const focusChat = useCallback(() => chat.current?.focus(), []);
   function askLoso(text: string) {
-    dock.setState("open");
+    openChat();
     setTimeout(() => chat.current?.fill(text), 30);
   }
 
   // Pictures arriving (paste, drop, "Point at it") and the settings sheet.
-  const openDock = useCallback(() => dock.setState("open"), [dock]);
   const inbox = useLosoInbox({
     backend,
     chat,
-    dockState: dock.state,
-    openDock,
+    dockState: chatState,
+    openDock: openChat,
     ingestFiles: (files) => ingestFiles(files),
     announce,
     setError,
@@ -907,10 +949,150 @@ export function CompositorEditor({ backend }: { backend: EditorBackend }) {
 
   const lastStep = versions[versions.length - 1];
 
+  // The top bar's actions, folded into More on a phone.
+  const nextTheme = THEMES[(THEMES.indexOf(theme) + 1) % THEMES.length];
+  const phoneMenu: MenuItem[] = [
+    {
+      key: "undo",
+      icon: Undo2,
+      label: "Undo",
+      disabledReason: agentBusy ? "Wait until Loso finishes" : !canUndo ? "Nothing to undo yet" : null,
+      onSelect: undo,
+    },
+    {
+      key: "redo",
+      icon: Redo2,
+      label: "Redo",
+      disabledReason: agentBusy ? "Wait until Loso finishes" : !canRedo ? "Nothing to redo" : null,
+      onSelect: redo,
+    },
+    { key: "versions", icon: HistoryIcon, label: "Versions", detail: String(versions.length), onSelect: () => setVersionsOpen(true) },
+    {
+      key: "point",
+      icon: PenLine,
+      label: "Point at it",
+      disabledReason: agentBusy
+        ? "Wait until Loso finishes"
+        : previewing
+          ? "Go back to your latest version first"
+          : layers.length === 0
+            ? "Add something to your video first"
+            : null,
+      onSelect: () => inbox.startMarking(null),
+    },
+    ...(renderUrl && !rendering
+      ? [
+          {
+            key: "download",
+            icon: Download,
+            label: renderStale ? "Download old version" : "Download the video",
+            href: renderUrl,
+            download: `${safeFileName(title)}.mp4`,
+            separated: true,
+          },
+        ]
+      : []),
+    {
+      key: "pieces",
+      icon: LayoutGrid,
+      label: "Video settings",
+      detail: SHAPE_WORD[activePreset?.id ?? ""] ?? "Custom",
+      onSelect: () => {
+        setSelectedId(null);
+        setWordsOpen(false);
+        setPhoneTab("pieces");
+      },
+      separated: !(renderUrl && !rendering),
+    },
+    {
+      key: "theme",
+      icon: theme === "dark" ? Moon : theme === "light" ? Sun : Monitor,
+      label: `Theme: ${THEME_LABEL[theme]}`,
+      detail: `→ ${THEME_LABEL[nextTheme]}`,
+      onSelect: () => setTheme(nextTheme),
+    },
+    { key: "settings", icon: Settings2, label: "Settings and AI key", onSelect: () => settings.open({ opener: null }) },
+  ];
+
+  // ---- story strip (bottom drawer; the Story tab on a phone) ----
+  const storySection = (
+          <section
+            aria-labelledby="story-h"
+            className={cx("flex shrink-0 flex-col", phone ? "min-h-0 pt-3 [grid-area:panel]" : "border-t border-line")}
+            style={phone ? undefined : { paddingRight: safeRight, maxHeight: storyOpen ? "40%" : undefined }}
+          >
+            {phone && (
+              <h2 id="story-h" className="sr-only">
+                Story
+              </h2>
+            )}
+            <button
+              type="button"
+              hidden={phone}
+              aria-expanded={storyOpen}
+              aria-controls="story-rows"
+              onClick={() => setStoryOpen(!storyOpen)}
+              className="flex h-10 shrink-0 items-center gap-3 px-6 text-left"
+            >
+              <span id={phone ? undefined : "story-h"} className="font-mono text-[11px] uppercase tracking-[0.12em] text-ink-dim">
+                Story
+              </span>
+              <span className="text-[12.5px] text-ink-dim">
+                {durationSec.toFixed(durationSec % 1 ? 1 : 0)} seconds · {layers.length} {layers.length === 1 ? "piece" : "pieces"}
+              </span>
+              <ChevronUp size={14} className={cx("ml-auto text-ink-dim transition-transform", !storyOpen && "rotate-180")} aria-hidden />
+            </button>
+            {(storyOpen || phone) && (
+              <div id="story-rows" className={cx("min-h-0 overflow-y-auto pb-4", phone ? "overscroll-contain px-4" : "px-6")}>
+                {phone && sortedLayers.length === 0 && (
+                  <p className="py-4 text-[14px] leading-relaxed text-ink-dim">
+                    Nothing in the video yet. Each piece shows up here as a bar: where it starts, and how long it stays.
+                  </p>
+                )}
+                <div className="flex flex-col gap-1">
+                  {sortedLayers.map((l) => {
+                    // all captions fold into one row that shows their words
+                    if (isCaption(l))
+                      return l.id === sortedLayers.find(isCaption)?.id ? (
+                        <WordsStoryRow key="words-on-screen" doc={doc} activeId={selectedId} onOpen={(id) => setSelectedId(id)} />
+                      ) : null;
+                    const total = Math.max(1, output.durationInFrames);
+                    const left = (l.from / total) * 100;
+                    const w = (Math.min(l.durationInFrames, total - l.from) / total) * 100;
+                    const Icon = TYPE_ICON[l.type];
+                    const label = layerLabel(l);
+                    const on = selectedId === l.id;
+                    return (
+                      <button
+                        type="button"
+                        key={l.id}
+                        aria-pressed={on}
+                        aria-label={`${label}, from ${sec(l.from)} to ${sec(l.from + l.durationInFrames)} seconds`}
+                        className={cx("relative block w-full cursor-pointer bg-panel", phone ? "h-10" : "h-6")}
+                        onClick={() => setSelectedId(l.id)}
+                      >
+                        <span
+                          className={cx(
+                            "absolute top-0 flex h-full min-w-0 items-center gap-1 overflow-hidden px-1.5 text-[11.5px]",
+                            on ? "bg-lime-fill text-black" : agentFocus.includes(l.id) ? "bg-lime-fill/40 text-ink" : "bg-line-strong text-ink"
+                          )}
+                          style={{ left: `${left}%`, width: `${Math.max(2, w)}%` }}
+                        >
+                          <Icon size={10} className="shrink-0" aria-hidden />
+                          <span className="truncate">{label}</span>
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+          </section>
+  );
+
   return (
     <div className="relative flex h-full flex-col">
       <FontLoader families={[...FONT_CHOICES, ...textFamilies]} />
-      <NarrowScreenNote />
       <input
         ref={fileInputRef}
         type="file"
@@ -929,7 +1111,7 @@ export function CompositorEditor({ backend }: { backend: EditorBackend }) {
         href="#loso-chat"
         onClick={(e) => {
           e.preventDefault();
-          if (dock.state !== "open") dock.setState("open");
+          if (chatState !== "open") openChat();
           setTimeout(focusChat, 30);
         }}
         className="sr-only focus:not-sr-only focus:fixed focus:left-3 focus:top-3 focus:z-[200] focus:bg-lime-fill focus:px-3 focus:py-2 focus:text-[13px] focus:text-black"
@@ -941,18 +1123,29 @@ export function CompositorEditor({ backend }: { backend: EditorBackend }) {
           Never wraps: below 1280px the labels fold into icons (each keeps
           its name for screen readers and a tooltip), below 1024px Undo and
           Redo move into Versions, and the title truncates. */}
-      <header className="flex h-[52px] shrink-0 items-center gap-1.5 whitespace-nowrap border-b border-line pl-3 pr-3 lg:gap-3 lg:pl-4">
+      <header
+        className={cx(
+          "flex shrink-0 items-center whitespace-nowrap border-b border-line",
+          phone
+            ? "h-[calc(52px+env(safe-area-inset-top))] gap-1 pl-[max(4px,env(safe-area-inset-left))] pr-[max(8px,env(safe-area-inset-right))] pt-[env(safe-area-inset-top)]"
+            : "h-[52px] gap-1.5 pl-3 pr-3 lg:gap-3 lg:pl-4"
+        )}
+      >
         <Link
           href="/"
           aria-label="Loso: all your videos"
           title="All your videos"
-          className="flex h-10 shrink-0 items-center gap-1.5 pr-1 text-ink-dim transition-colors hover:text-lime"
+          className={cx(
+            "flex shrink-0 items-center gap-1.5 text-ink-dim transition-colors hover:text-lime",
+            phone ? "h-11 min-w-11 justify-center" : "h-10 pr-1"
+          )}
         >
-          <ArrowLeft size={14} aria-hidden />
-          <LosoLogo size={20} className="text-ink max-lg:[&>span:last-child]:hidden" />
+          <ArrowLeft size={phone ? 18 : 14} aria-hidden />
+          {!phone && <LosoLogo size={20} className="text-ink max-lg:[&>span:last-child]:hidden" />}
         </Link>
-        <span className="h-5 w-px shrink-0 bg-line-strong" aria-hidden />
+        {!phone && <span className="h-5 w-px shrink-0 bg-line-strong" aria-hidden />}
         <button
+          hidden={phone}
           type="button"
           onClick={() => {
             const next = !railOpen;
@@ -990,6 +1183,7 @@ export function CompositorEditor({ backend }: { backend: EditorBackend }) {
         </span>
         <SaveStatus
           state={saveState}
+          compact={phone}
           onRetry={() => {
             pendingDoc.current ??= doc;
             flush();
@@ -1020,6 +1214,7 @@ export function CompositorEditor({ backend }: { backend: EditorBackend }) {
         <button
           ref={versionsBtnRef}
           type="button"
+          hidden={phone}
           aria-expanded={versionsOpen}
           aria-haspopup="dialog"
           aria-label={`Versions, ${versions.length}`}
@@ -1035,6 +1230,8 @@ export function CompositorEditor({ backend }: { backend: EditorBackend }) {
             {versions.length}
           </span>
         </button>
+        {/* Phones reach these through More (the button stays mounted for its shortcut). */}
+        <span className={phone ? "hidden" : "contents"}>
         <PointAtItButton
           active={inbox.marking}
           onStart={inbox.startMarking}
@@ -1048,9 +1245,11 @@ export function CompositorEditor({ backend }: { backend: EditorBackend }) {
                   : null
           }
         />
-        <ThemeToggle accentHover />
+        </span>
+        {!phone && <ThemeToggle accentHover />}
         <button
           type="button"
+          hidden={phone}
           aria-haspopup="dialog"
           aria-label="Settings"
           title="Settings and your AI key (⌘ ,)"
@@ -1059,8 +1258,9 @@ export function CompositorEditor({ backend }: { backend: EditorBackend }) {
         >
           <Settings2 size={16} aria-hidden />
         </button>
-        <span className="mx-1 h-5 w-px shrink-0 bg-line-strong" aria-hidden />
-        {renderUrl && !rendering && (
+        {!phone && <span className="mx-1 h-5 w-px shrink-0 bg-line-strong" aria-hidden />}
+        {phone && <PhoneMenu items={phoneMenu} />}
+        {renderUrl && !rendering && !phone && (
           <a
             href={renderUrl}
             download={`${safeFileName(title)}.mp4`}
@@ -1101,7 +1301,7 @@ export function CompositorEditor({ backend }: { backend: EditorBackend }) {
                   ? "You've changed things since you last made it. This makes a new video with your changes."
                   : undefined
           }
-          className={cx("shrink-0", rendering && "pointer-events-none")}
+          className={cx("shrink-0", phone && "h-11 px-4 text-[14.5px]", rendering && "pointer-events-none")}
         >
           {rendering && <LosoMark working size={18} />}
           {rendering ? (
@@ -1116,8 +1316,15 @@ export function CompositorEditor({ backend }: { backend: EditorBackend }) {
         </Button>
       </header>
       {rendering && (
-        <p className="pointer-events-none absolute right-3 top-[58px] z-40 border border-line-strong bg-ground px-3 py-1.5 text-[12.5px] text-ink-dim shadow-[0_12px_30px_-12px_var(--color-shade)]">
-          Keep this tab open while Loso makes your video.
+        <p
+          className={cx(
+            "pointer-events-none absolute z-40 border border-line-strong bg-ground px-3 py-1.5 text-[12.5px] text-ink-dim shadow-[0_12px_30px_-12px_var(--color-shade)]",
+            phone ? "left-2 right-2 top-[calc(58px+env(safe-area-inset-top))] text-center" : "right-3 top-[58px]"
+          )}
+        >
+          {phone
+            ? "Keep Loso open and the screen on while it makes your video."
+            : "Keep this tab open while Loso makes your video."}
         </p>
       )}
 
@@ -1129,7 +1336,38 @@ export function CompositorEditor({ backend }: { backend: EditorBackend }) {
         </div>
       )}
 
-      <div className="relative flex min-h-0 flex-1">
+      <div
+        className={cx("relative min-h-0 flex-1", phone ? "grid" : "flex")}
+        style={
+          phone
+            ? landscape
+              ? {
+                  gridTemplateColumns: "minmax(0, 1fr) minmax(280px, 44%)",
+                  gridTemplateRows: "auto minmax(0, 1fr)",
+                  gridTemplateAreas: '"stage tabs" "stage panel"',
+                  paddingRight: "env(safe-area-inset-right)",
+                  paddingBottom: "env(safe-area-inset-bottom)",
+                }
+              : {
+                  gridTemplateColumns: "minmax(0, 1fr)",
+                  // The video's own shape decides how tall the stage is, up to a bit under half the screen.
+                  gridTemplateRows: `clamp(180px, calc((100vw - 24px) * ${(output.height / output.width).toFixed(4)} + 24px), 46dvh) auto minmax(0, 1fr)`,
+                  gridTemplateAreas: '"stage" "tabs" "panel"',
+                  paddingBottom: "env(safe-area-inset-bottom)",
+                }
+            : undefined
+        }
+      >
+        {phone && (
+          <PhoneTabs
+            tab={phoneTab}
+            setTab={setPhoneTab}
+            status={dockStatus}
+            agent={backend.agent}
+            pieces={layers.length}
+            seconds={durationSec.toFixed(durationSec % 1 ? 1 : 0)}
+          />
+        )}
         {/* ---- pieces rail ---- */}
         {railShown && (
           <aside
@@ -1139,8 +1377,8 @@ export function CompositorEditor({ backend }: { backend: EditorBackend }) {
             inert={agentBusy || undefined}
             aria-busy={agentBusy}
             className={cx(
-              "flex shrink-0 flex-col overflow-y-auto border-r border-line transition-opacity",
-              showWords ? "w-[380px]" : "w-[300px]",
+              "flex shrink-0 flex-col overflow-y-auto transition-opacity",
+              phone ? "min-h-0 min-w-0 overscroll-contain [grid-area:panel]" : cx("border-r border-line", showWords ? "w-[380px]" : "w-[300px]"),
               agentBusy && "opacity-50"
             )}
           >
@@ -1171,7 +1409,11 @@ export function CompositorEditor({ backend }: { backend: EditorBackend }) {
                 <section aria-labelledby="add-h" className="flex flex-col gap-2.5">
                   <RailHeading id="add-h">Add</RailHeading>
                   <div className="flex flex-col border-t border-line">
-                    <RailAction icon={Plus} label="Add files from your computer" onClick={pickFiles} />
+                    <RailAction
+                      icon={Plus}
+                      label={phone || backend.folder?.inBrowser ? "Add videos, photos and sounds" : "Add files from your computer"}
+                      onClick={pickFiles}
+                    />
                     <RailAction icon={TypeIcon} label="Add words" onClick={addText} />
                     <RailAction icon={WordsIcon} label="Words on screen (subtitles)" onClick={() => setWordsOpen(true)} />
                   </div>
@@ -1354,7 +1596,7 @@ export function CompositorEditor({ backend }: { backend: EditorBackend }) {
         <section
           ref={stageSectionRef}
           aria-label="Preview of your video"
-          className="relative flex min-w-0 flex-1 flex-col bg-void"
+          className={cx("relative flex min-w-0 flex-col bg-void", phone ? "min-h-0 [grid-area:stage]" : "flex-1")}
         >
           {/* With footage on it the well goes dark in both themes (a lightbox:
               paper around a video skews how its colours read). Empty, it stays
@@ -1369,8 +1611,11 @@ export function CompositorEditor({ backend }: { backend: EditorBackend }) {
             {/* the safe area: everything left of the floating dock */}
             <div
               ref={stageRef}
-              className="absolute bottom-7 left-8 flex items-center justify-center"
-              style={{ right: safeRight + 32, top: inbox.marking && markBarH ? markBarH + 20 : 28 }}
+              className={cx("absolute flex items-center justify-center", phone ? "bottom-3 left-3" : "bottom-7 left-8")}
+              style={{
+                right: safeRight + (phone ? 12 : 32),
+                top: inbox.marking && markBarH ? markBarH + (phone ? 8 : 20) : phone ? 12 : 28,
+              }}
             >
               {dispW > 0 && (layers.length > 0 || previewing) && (
                 <div
@@ -1477,9 +1722,25 @@ export function CompositorEditor({ backend }: { backend: EditorBackend }) {
                   prompts live in one place: in the chat while it's open, here
                   while it's folded away. */}
               {layers.length === 0 && !previewing && (
-                <div className="absolute inset-0 z-20 flex items-center justify-center p-6" onPointerDown={(e) => e.stopPropagation()}>
-                  <div className="flex max-w-[440px] flex-col gap-5">
-                    {dock.state === "open" && backend.agent ? (
+                <div
+                  className={cx("absolute inset-0 z-20 flex items-center justify-center", phone ? "p-2" : "p-6")}
+                  onPointerDown={(e) => e.stopPropagation()}
+                >
+                  <div className={cx("flex max-w-[440px] flex-col", phone ? "gap-3" : "gap-5")}>
+                    {phone ? (
+                      <>
+                        <p className="font-serif text-[30px] font-light italic leading-[1.05] tracking-tight text-ink">
+                          Start with your clips.
+                        </p>
+                        <p className="text-[14.5px] leading-relaxed text-ink-dim">
+                          {backend.folder?.inBrowser && backend.agent
+                            ? "Your clips are in. Tell Loso below what to make, or put one in yourself from Your clips."
+                            : backend.agent
+                              ? "Put a video or photo in, then tell Loso below what to make."
+                              : "Put a video or photo in to start."}
+                        </p>
+                      </>
+                    ) : chatState === "open" && backend.agent ? (
                       <>
                         <p className="font-serif text-[clamp(30px,3.4vw,44px)] font-light italic leading-[1.05] tracking-tight text-ink">
                           Start with your clips.
@@ -1509,12 +1770,25 @@ export function CompositorEditor({ backend }: { backend: EditorBackend }) {
                         </ul>
                       </>
                     )}
-                    <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-[13.5px] text-ink-dim">
-                      <Button size="sm" variant="outline" onClick={pickFiles}>
-                        <Plus size={14} aria-hidden /> Add files
-                      </Button>
-                      <span>or drop videos, pictures and sounds anywhere.</span>
-                    </div>
+                    {phone ? (
+                      <div className="flex flex-wrap items-center gap-2">
+                        <Button variant="outline" className="h-11 px-5" onClick={pickFiles}>
+                          <Plus size={15} aria-hidden /> Add videos and photos
+                        </Button>
+                        {backend.folder && (
+                          <Button variant="ghost" className="h-11 px-3" onClick={() => setPhoneTab("pieces")}>
+                            Your clips
+                          </Button>
+                        )}
+                      </div>
+                    ) : (
+                      <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-[13.5px] text-ink-dim">
+                        <Button size="sm" variant="outline" onClick={pickFiles}>
+                          <Plus size={14} aria-hidden /> Add files
+                        </Button>
+                        <span>or drop videos, pictures and sounds anywhere.</span>
+                      </div>
+                    )}
                   </div>
                 </div>
               )}
@@ -1559,69 +1833,9 @@ export function CompositorEditor({ backend }: { backend: EditorBackend }) {
             )}
           </div>
 
-          {/* ---- story strip (bottom drawer) ---- */}
-          <section
-            aria-labelledby="story-h"
-            className="flex shrink-0 flex-col border-t border-line"
-            style={{ paddingRight: safeRight, maxHeight: storyOpen ? "40%" : undefined }}
-          >
-            <button
-              type="button"
-              aria-expanded={storyOpen}
-              aria-controls="story-rows"
-              onClick={() => setStoryOpen(!storyOpen)}
-              className="flex h-10 shrink-0 items-center gap-3 px-6 text-left"
-            >
-              <span id="story-h" className="font-mono text-[11px] uppercase tracking-[0.12em] text-ink-dim">
-                Story
-              </span>
-              <span className="text-[12.5px] text-ink-dim">
-                {durationSec.toFixed(durationSec % 1 ? 1 : 0)} seconds · {layers.length} {layers.length === 1 ? "piece" : "pieces"}
-              </span>
-              <ChevronUp size={14} className={cx("ml-auto text-ink-dim transition-transform", !storyOpen && "rotate-180")} aria-hidden />
-            </button>
-            {storyOpen && (
-              <div id="story-rows" className="min-h-0 overflow-y-auto px-6 pb-4">
-                <div className="flex flex-col gap-1">
-                  {sortedLayers.map((l) => {
-                    // all captions fold into one row that shows their words
-                    if (isCaption(l))
-                      return l.id === sortedLayers.find(isCaption)?.id ? (
-                        <WordsStoryRow key="words-on-screen" doc={doc} activeId={selectedId} onOpen={(id) => setSelectedId(id)} />
-                      ) : null;
-                    const total = Math.max(1, output.durationInFrames);
-                    const left = (l.from / total) * 100;
-                    const w = (Math.min(l.durationInFrames, total - l.from) / total) * 100;
-                    const Icon = TYPE_ICON[l.type];
-                    const label = layerLabel(l);
-                    const on = selectedId === l.id;
-                    return (
-                      <button
-                        type="button"
-                        key={l.id}
-                        aria-pressed={on}
-                        aria-label={`${label}, from ${sec(l.from)} to ${sec(l.from + l.durationInFrames)} seconds`}
-                        className="relative block h-6 w-full cursor-pointer bg-panel"
-                        onClick={() => setSelectedId(l.id)}
-                      >
-                        <span
-                          className={cx(
-                            "absolute top-0 flex h-full min-w-0 items-center gap-1 overflow-hidden px-1.5 text-[11.5px]",
-                            on ? "bg-lime-fill text-black" : agentFocus.includes(l.id) ? "bg-lime-fill/40 text-ink" : "bg-line-strong text-ink"
-                          )}
-                          style={{ left: `${left}%`, width: `${Math.max(2, w)}%` }}
-                        >
-                          <Icon size={10} className="shrink-0" aria-hidden />
-                          <span className="truncate">{label}</span>
-                        </span>
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
-          </section>
+          {!phone && storySection}
         </section>
+        {phone && phoneTab === "story" && storySection}
 
         {/* ---- Loso, floating ---- */}
         <ChatDock
@@ -1631,6 +1845,7 @@ export function CompositorEditor({ backend }: { backend: EditorBackend }) {
           setWidth={dock.setWidth}
           status={dockStatus}
           focusInside={focusChat}
+          phone={phone ? { visible: phoneTab === "loso" } : null}
         >
           {(controls) =>
             backend.agent ? (
@@ -1646,7 +1861,7 @@ export function CompositorEditor({ backend }: { backend: EditorBackend }) {
                 controlRef={chat}
                 onStatus={setDockStatus}
                 announce={announce}
-                dockOpen={dock.state === "open"}
+                dockOpen={chatState === "open"}
                 onPutInVideo={inbox.putInVideo}
               />
             ) : null
@@ -1659,6 +1874,7 @@ export function CompositorEditor({ backend }: { backend: EditorBackend }) {
             fileName={`${safeFileName(title)}.mp4`}
             savedAs={ready.savedAs}
             folderName={backend.folder?.name}
+            inBrowser={backend.folder?.inBrowser}
             aspect={output.width / output.height}
             right={safeRight}
             onClose={() => {

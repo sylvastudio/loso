@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="robots" content="noindex" />
+    <title>Loso forms</title>
+  </head>
+  <body>
+    <!-- Declares the feedback form for Netlify Forms; the app posts to it with fetch. -->
+    <form name="feedback" data-netlify="true" netlify-honeypot="bot-field" hidden>
+      <input name="bot-field" />
+      <input name="kind" />
+      <textarea name="message"></textarea>
+      <input name="email" type="email" />
+      <input name="page" />
+    </form>
+  </body>
+</html>

@@ -139,3 +139,19 @@ export async function transcribeLocal(
     transcribeMs: t3 - t2,
   };
 }
+
+/** Turn a short voice note (anything the browser can decode) into text, for the chat box. */
+export async function transcribeSpeech(note: Blob, onStatus: (s: string) => void = () => {}): Promise<string> {
+  // decodeAudioData resamples to the context's rate, so a 16 kHz context gives Whisper its input directly.
+  const decoded = await new OfflineAudioContext(1, 1, SAMPLE_RATE).decodeAudioData(await note.arrayBuffer());
+  const mono = new Float32Array(decoded.length);
+  for (let c = 0; c < decoded.numberOfChannels; c++) {
+    const ch = decoded.getChannelData(c);
+    for (let i = 0; i < ch.length; i++) mono[i] += ch[i] / decoded.numberOfChannels;
+  }
+  onStatus("Getting ready to listen…");
+  const { asr } = await loadAsr(onStatus);
+  onStatus("Writing down what you said…");
+  const out = await asr(mono, { chunk_length_s: 30 });
+  return out.text.trim();
+}

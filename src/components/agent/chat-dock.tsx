@@ -179,6 +179,7 @@ export function ChatDock({
   setWidth,
   status,
   focusInside,
+  phone = null,
   children,
 }: {
   state: DockState;
@@ -188,6 +189,13 @@ export function ChatDock({
   status: DockStatus;
   /** Move focus into the chat (composer, or the recommended answer). */
   focusInside: () => void;
+  /**
+   * Phones: no floating dock. The chat fills the editor's "Loso" tab (the
+   * panel under the video) and is shown while that tab is picked. The same
+   * elements stay mounted, so a running turn survives switching tabs or
+   * rotating the phone.
+   */
+  phone?: { visible: boolean } | null;
   /** The chat. Gets the header controls (peek / close) to place in its own header. */
   children: (controls: ReactNode) => ReactNode;
 }) {
@@ -212,6 +220,7 @@ export function ChatDock({
 
   // ⌘/Ctrl+J opens the dock (or focuses the composer when it's already open).
   useEffect(() => {
+    if (phone) return;
     const onKey = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "j") {
         e.preventDefault();
@@ -222,7 +231,7 @@ export function ChatDock({
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state, focusInside]);
+  }, [state, focusInside, !!phone]);
 
   // Drag the left hairline to resize; double-click resets.
   function beginResize(e: React.PointerEvent) {
@@ -262,6 +271,21 @@ export function ChatDock({
   );
 
   const attention = (status.question || status.unread) && state !== "open";
+
+  if (phone) {
+    return (
+      <aside
+        id="loso-chat"
+        aria-label="Loso chat"
+        hidden={!phone.visible}
+        className={cx("min-h-0 min-w-0 bg-ground [grid-area:panel]", phone.visible ? "flex" : "hidden")}
+      >
+        <div id="loso-chat-body" className="flex min-w-0 flex-1 flex-col">
+          {children(null)}
+        </div>
+      </aside>
+    );
+  }
 
   return (
     <>

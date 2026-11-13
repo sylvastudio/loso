@@ -20,6 +20,7 @@ import type { ConfigPayload } from "@/components/agent/connect-card";
 import { AiKeyForm, LocalKeyForm } from "@/components/settings/ai-key-form";
 import { AiPanel } from "@/components/settings/ai-panel";
 import { AppearancePicker } from "@/components/theme-toggle";
+import { FeedbackForm } from "@/components/settings/feedback-form";
 
 // Settings without leaving the page: a right-side sheet over whatever you're
 // doing (editor or home). Opens from the gear in the editor bar, the home
@@ -29,7 +30,7 @@ import { AppearancePicker } from "@/components/theme-toggle";
 // /settings renders the same <SettingsContent> as a full page.
 
 export type SettingsMode = "server" | "local" | "auto";
-export type SettingsTab = "ai" | "look";
+export type SettingsTab = "ai" | "look" | "feedback";
 
 interface OpenOpts {
   opener?: HTMLElement | null;
@@ -174,6 +175,7 @@ function SettingsSheet({ mode, initialTab, onClose }: { mode: SettingsMode; init
 const TABS: Array<{ id: SettingsTab; label: string }> = [
   { id: "ai", label: "AI" },
   { id: "look", label: "Appearance" },
+  { id: "feedback", label: "Tell us" },
 ];
 
 /**
@@ -340,6 +342,9 @@ export function SettingsContent({
         </div>
         <div id={`${hId}-panel-look`} role="tabpanel" aria-labelledby={`${hId}-tab-look`} hidden={shown !== "look"}>
           <AppearancePicker />
+        </div>
+        <div id={`${hId}-panel-feedback`} role="tabpanel" aria-labelledby={`${hId}-tab-feedback`} hidden={shown !== "feedback"}>
+          {shown === "feedback" && <FeedbackForm />}
         </div>
       </div>
     </>

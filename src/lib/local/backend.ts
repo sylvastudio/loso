@@ -74,7 +74,7 @@ export function localBackend(initial: OpenProject, exportUrl: string | null): Ed
       const urls = await localAssetUrls(dir, id, mediaRefs(doc));
       const missing = Object.entries(urls).filter(([, u]) => !u).map(([p]) => p);
       if (missing.length) {
-        throw new Error(`Some files are missing from the folder: ${missing.slice(0, 3).join(", ")}${missing.length > 3 ? "…" : ""}`);
+        throw new Error(`Some files are missing${initial.record.storage === "browser" ? "" : " from the folder"}: ${missing.slice(0, 3).join(", ")}${missing.length > 3 ? "…" : ""}`);
       }
       const { blob } = await exportInTab(resolveDocWith(doc, urls), { onProgress });
       onProgress(null);
@@ -106,7 +106,9 @@ export function localBackend(initial: OpenProject, exportUrl: string | null): Ed
     },
 
     folder: {
-      name: dir.name,
+      // Browser-stored projects: the words for where they are ("This phone").
+      name: initial.record.storage === "browser" ? initial.record.folderName : dir.name,
+      inBrowser: initial.record.storage === "browser",
       list: () => listMedia(dir),
       refFor: (entry) => entry.path,
     },

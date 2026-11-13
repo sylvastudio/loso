@@ -184,7 +184,7 @@ export function ErrorState({
   children?: ReactNode;
 }) {
   return (
-    <div className="flex flex-col items-center gap-3 py-24 text-center" role="alert">
+    <div className="flex flex-col items-center gap-3 px-5 py-24 text-center" role="alert">
       <p className="font-serif text-[21px] italic text-ink-dim">{title}</p>
       {detail && <p className="max-w-sm text-[12.5px] leading-relaxed text-ink-faint">{detail}</p>}
       <div className="mt-2 flex items-center gap-3">
