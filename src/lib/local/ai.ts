@@ -1,8 +1,10 @@
 // The browser-only app's AI setup: the user's own key for one of the
 // providers in ./providers, called straight from this tab (no Loso server).
-// Keys are per provider. Each lives in memory by default and is written to
-// IndexedDB only if the user ticks "Remember on this computer". A key is never
-// put in a .loso file, a URL, an export or a log.
+// Keys are per provider. By default a key lasts as long as the tab
+// (sessionStorage, so a reload keeps it: iPhones reload tabs that run low on
+// memory) and is gone when the tab closes. It is written to IndexedDB only if
+// the user ticks "Remember on this computer". A key is never put in a .loso
+// file, a URL, an export or a log.
 
 import { anthropicAdapter } from "../ai/anthropic";
 import { geminiAdapter } from "../ai/gemini";
@@ -27,6 +29,23 @@ const SETTINGS_KEY = "ai";
 
 // Secrets are keyed by provider id ("anthropic" is the key saved before other providers existed).
 const memoryKeys = new Map<BrowserProviderId, string>();
+
+const tabKeyName = (p: BrowserProviderId) => `loso-key:${p}`;
+function tabKey(p: BrowserProviderId): string | null {
+  try {
+    return sessionStorage.getItem(tabKeyName(p));
+  } catch {
+    return null;
+  }
+}
+function setTabKey(p: BrowserProviderId, key: string | null) {
+  try {
+    if (key) sessionStorage.setItem(tabKeyName(p), key);
+    else sessionStorage.removeItem(tabKeyName(p));
+  } catch {
+    /* storage blocked: the key lives in memory only */
+  }
+}
 
 function announce() {
   if (typeof window !== "undefined") window.dispatchEvent(new Event(LOCAL_AI_CHANGED));
@@ -57,11 +76,14 @@ export async function saveLocalAiSettings(patch: Partial<LocalAiSettings>): Prom
   return next;
 }
 
-/** A provider's key for this tab (default: the provider in use): in memory, or remembered on this computer. */
+/** A provider's key for this tab (default: the provider in use): for this tab, or remembered on this computer. */
 export async function localKey(provider?: BrowserProviderId): Promise<string | null> {
   const p = provider ?? (await currentProvider());
-  const mem = memoryKeys.get(p);
-  if (mem) return mem;
+  const mem = memoryKeys.get(p) ?? tabKey(p);
+  if (mem) {
+    memoryKeys.set(p, mem);
+    return mem;
+  }
   try {
     const saved = await idbGet<string>("secrets", p);
     if (saved) memoryKeys.set(p, saved);
@@ -92,6 +114,7 @@ export function maskKey(key: string): string {
 /** Use this key for a provider from now on; `remember` also keeps it on this computer. */
 export async function setLocalKey(provider: BrowserProviderId, key: string, remember: boolean) {
   memoryKeys.set(provider, key.trim());
+  setTabKey(provider, key.trim());
   if (remember) await idbPut("secrets", provider, key.trim());
   else await idbDelete("secrets", provider).catch(() => {});
   announce();
@@ -100,6 +123,7 @@ export async function setLocalKey(provider: BrowserProviderId, key: string, reme
 /** Forget a provider's key everywhere (memory and this computer). */
 export async function forgetLocalKey(provider: BrowserProviderId) {
   memoryKeys.delete(provider);
+  setTabKey(provider, null);
   await idbDelete("secrets", provider).catch(() => {});
   if ((await currentProvider()) === provider) await saveLocalAiSettings({ lastTest: null });
   else announce();

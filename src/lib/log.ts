@@ -84,6 +84,9 @@ let installed = false;
 export function installLogCapture() {
   if (installed || typeof window === "undefined") return;
   installed = true;
+  // A reload nobody asked for (phones do this when a tab runs low on memory) explains lost work.
+  const nav = performance.getEntriesByType("navigation")[0] as PerformanceNavigationTiming | undefined;
+  if (nav?.type === "reload") logEvent("info", "page", `reloaded ${location.pathname}`);
   window.addEventListener("error", (e) => logEvent("error", "page", e.error ?? e.message, e.filename ? `(${e.filename.split("/").pop()}:${e.lineno})` : ""));
   window.addEventListener("unhandledrejection", (e) => logEvent("error", "promise", e.reason));
   for (const level of ["error", "warn"] as const) {
