@@ -318,7 +318,11 @@ export const Composer = forwardRef<
               <span>
                 Listening… {Math.floor(voice.seconds / 60)}:{String(voice.seconds % 60).padStart(2, "0")}
               </span>
-              <span className="text-ink-dim">Tap the mic when you&rsquo;re done. Esc cancels.</span>
+              {voice.live ? (
+                <span className="min-w-0 flex-1 truncate italic text-ink-dim">&ldquo;{voice.live}&rdquo;</span>
+              ) : (
+                <span className="text-ink-dim">Tap the mic when you&rsquo;re done. Esc cancels.</span>
+              )}
             </>
           ) : (
             <span className="text-ink-dim">{voice.status ?? "Writing down what you said…"}</span>
