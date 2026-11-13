@@ -27,7 +27,9 @@ function Shell({ children }: { children: React.ReactNode }) {
   const editor = isEditorRoute(pathname);
 
   return (
-    <div className="flex h-dvh flex-col overflow-hidden">
+    // overflow-clip, not hidden: a hidden box can still be scrolled by focus()
+    // or scrollIntoView, which slid the whole app up.
+    <div className="flex h-dvh flex-col overflow-clip">
       <a
         href="#main"
         className="sr-only focus:not-sr-only focus:fixed focus:left-3 focus:top-3 focus:z-[200] focus:bg-lime-fill focus:px-3 focus:py-2 focus:text-[13px] focus:text-black"
@@ -60,7 +62,8 @@ function Shell({ children }: { children: React.ReactNode }) {
         </header>
       )}
 
-      <main id="main" className="min-h-0 flex-1 overflow-y-auto">
+      {/* The editor scrolls its own panels; the page itself never moves. */}
+      <main id="main" className={editor ? "min-h-0 flex-1 overflow-clip" : "min-h-0 flex-1 overflow-y-auto"}>
         {children}
       </main>
     </div>

@@ -110,6 +110,13 @@
   --color-shade: rgb(0 0 0 / 0.95);
 }
 
+html,
+body {
+  height: 100%;
+  overflow: clip;
+  overscroll-behavior: none;
+}
+
 body {
   background: var(--color-ground);
   color: var(--color-ink);
