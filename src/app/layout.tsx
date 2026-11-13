@@ -22,8 +22,8 @@ const plexMono = IBM_Plex_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Loso — Short-Video Studio",
-  description: "Script in. Branded 9:16 short out.",
+  title: "Loso: tell it the video you want",
+  description: "Say what you want and Loso makes the video, right in the folder on your computer.",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

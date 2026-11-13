@@ -2,65 +2,47 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { LayoutTemplate, Trash2 } from "lucide-react";
-import { InlineError, cx } from "@/components/ui";
-import { fetchJson, jsonInit } from "@/lib/fetch-json";
+import { InlineError } from "@/components/ui";
 import type { CompositorDoc } from "@/lib/compositor";
+import type { TemplateBackend, TemplateInfo } from "./backend";
 
-interface TemplateInfo {
-  id: string;
-  name: string;
-  description: string;
-  builtin: boolean;
-  width: number;
-  height: number;
-  slots: Array<{ name: string; kind: string }>;
-}
-
-// Left-rail section: apply a saved design, or save this canvas as one.
-// Slots (the parts that change per video) are marked per layer in the
-// inspector's "Slot" field — or by the agent.
+// Left-rail section ("Starting points"): apply a saved design, or save this
+// video as one. Applying needs no "are you sure": it's a new version, and
+// Versions can always go back. Slots (the parts that change per video) are
+// marked per piece in "More controls" — or by the agent.
 export function TemplatesSection({
-  projectId,
+  templates: backend,
   doc,
   beforeApply,
   onApplied,
 }: {
-  projectId: string;
+  templates: TemplateBackend;
   doc: CompositorDoc;
   beforeApply: () => Promise<boolean>;
-  onApplied: (doc: CompositorDoc) => void;
+  onApplied: (doc: CompositorDoc, name: string) => void;
 }) {
   const [templates, setTemplates] = useState<TemplateInfo[] | null>(null);
-  const [armed, setArmed] = useState<string | null>(null); // two-step "replace canvas?"
+  const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [name, setName] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [flash, setFlash] = useState<string | null>(null);
 
   const load = useCallback(() => {
-    fetchJson<{ templates: TemplateInfo[] }>("/api/templates")
-      .then((d) => setTemplates(d.templates))
+    backend
+      .list()
+      .then(setTemplates)
       .catch((e: Error) => setError(e.message));
-  }, []);
+  }, [backend]);
   useEffect(load, [load]);
 
-  useEffect(() => {
-    if (!armed) return;
-    const t = setTimeout(() => setArmed(null), 4000);
-    return () => clearTimeout(t);
-  }, [armed]);
-
   async function apply(t: TemplateInfo) {
-    if (doc.layers.length && armed !== t.id) {
-      setArmed(t.id);
-      return;
-    }
-    setArmed(null);
     setError(null);
-    if (!(await beforeApply())) return setError("Couldn't save your edits first — try again.");
+    if (!(await beforeApply())) return setError("Couldn't save your changes first. Try again.");
     try {
-      const d = await fetchJson<{ doc: CompositorDoc }>("/api/templates/apply", jsonInit("POST", { projectId, templateId: t.id }));
-      onApplied(d.doc);
+      onApplied(await backend.apply(t.id), t.name);
+      setFlash(`Started from “${t.name}”. Versions can take you back.`);
+      setTimeout(() => setFlash(null), 4000);
     } catch (e) {
       setError((e as Error).message);
     }
@@ -70,14 +52,11 @@ export function TemplatesSection({
     if (!name.trim()) return;
     setError(null);
     try {
-      const d = await fetchJson<{ template: { name: string; slots: unknown[] } }>(
-        "/api/templates",
-        jsonInit("POST", { name: name.trim(), doc })
-      );
+      const d = await backend.save(name.trim(), doc);
       setName("");
       setSaving(false);
-      setFlash(`Saved “${d.template.name}” · ${d.template.slots.length} slot${d.template.slots.length === 1 ? "" : "s"}`);
-      setTimeout(() => setFlash(null), 2500);
+      setFlash(`Saved “${d.name}” as a starting point`);
+      setTimeout(() => setFlash(null), 4000);
       load();
     } catch (e) {
       setError((e as Error).message);
@@ -87,40 +66,57 @@ export function TemplatesSection({
   const slotCount = doc.layers.filter((l) => l.slot).length;
 
   return (
-    <div className="flex flex-col gap-2 border-t border-line pt-5">
-      <span className="micro">Templates</span>
-      {templates?.map((t) => (
-        <div key={t.id} className="group flex items-center gap-2">
-          <button
-            type="button"
-            onClick={() => apply(t)}
-            title={t.description}
-            className={cx(
-              "flex min-w-0 flex-1 items-center gap-2 rounded-md border px-2.5 py-1.5 text-left text-[12.5px] transition-colors",
-              armed === t.id ? "border-danger/60 text-danger" : "border-line text-ink-dim hover:border-lime/60 hover:text-ink"
+    <section aria-labelledby="start-h" className="flex flex-col gap-2.5">
+      <h2 id="start-h" className="font-mono text-[11px] uppercase tracking-[0.12em] text-ink-dim">
+        Starting points
+      </h2>
+      <ul className="flex flex-col border-t border-line">
+        {templates?.map((t) => (
+          <li key={t.id} className="flex items-center gap-1 border-b border-line">
+            {confirmDelete === t.id ? (
+              <span className="flex min-h-10 flex-1 items-center gap-3 text-[13px] text-ink" role="group" aria-label={`Delete ${t.name}?`}>
+                Delete “{t.name}”?
+                <button
+                  type="button"
+                  onClick={async () => {
+                    await backend.remove(t.id);
+                    setConfirmDelete(null);
+                    load();
+                  }}
+                  className="min-h-10 text-danger hover:underline"
+                >
+                  Delete
+                </button>
+                <button type="button" autoFocus onClick={() => setConfirmDelete(null)} className="min-h-10 text-ink-dim hover:text-ink">
+                  Keep
+                </button>
+              </span>
+            ) : (
+              <>
+                <button
+                  type="button"
+                  onClick={() => apply(t)}
+                  title={t.description}
+                  className="group flex min-h-10 min-w-0 flex-1 items-center gap-2.5 text-left text-[13.5px] text-ink transition-colors hover:text-lime"
+                >
+                  <LayoutTemplate size={14} className="shrink-0 text-ink-dim group-hover:text-lime" aria-hidden />
+                  <span className="min-w-0 flex-1 truncate">{t.name}</span>
+                </button>
+                {!t.builtin && (
+                  <button
+                    type="button"
+                    aria-label={`Delete starting point ${t.name}`}
+                    onClick={() => setConfirmDelete(t.id)}
+                    className="flex h-8 w-8 shrink-0 items-center justify-center text-ink-dim opacity-60 transition-opacity hover:text-danger hover:opacity-100 focus-visible:opacity-100"
+                  >
+                    <Trash2 size={13} />
+                  </button>
+                )}
+              </>
             )}
-          >
-            <LayoutTemplate size={13} className="shrink-0" />
-            <span className="min-w-0 flex-1 truncate">{armed === t.id ? "Replace this canvas?" : t.name}</span>
-            <span className="shrink-0 font-mono text-[10px] text-ink-faint">
-              {armed === t.id ? "click again" : `${t.width}×${t.height}`}
-            </span>
-          </button>
-          {!t.builtin && (
-            <button
-              type="button"
-              aria-label={`Delete template ${t.name}`}
-              onClick={async () => {
-                await fetch(`/api/templates?id=${t.id}`, { method: "DELETE" });
-                load();
-              }}
-              className="flex h-6 w-6 shrink-0 items-center justify-center rounded text-ink-faint opacity-0 transition-opacity hover:text-danger group-hover:opacity-100 focus-visible:opacity-100"
-            >
-              <Trash2 size={12} />
-            </button>
-          )}
-        </div>
-      ))}
+          </li>
+        ))}
+      </ul>
       {saving ? (
         <div className="flex items-center gap-2">
           <input
@@ -131,11 +127,11 @@ export function TemplatesSection({
               if (e.key === "Enter") save();
               if (e.key === "Escape") setSaving(false);
             }}
-            placeholder="Template name"
-            aria-label="Template name"
-            className="uline !py-1 text-[12.5px]"
+            placeholder="Name it"
+            aria-label="Name for this starting point"
+            className="uline !py-1 text-[13.5px]"
           />
-          <button type="button" onClick={save} disabled={!name.trim()} className="text-[12px] text-lime disabled:opacity-40">
+          <button type="button" onClick={save} disabled={!name.trim()} className="min-h-10 text-[13px] text-lime disabled:opacity-40">
             Save
           </button>
         </div>
@@ -144,20 +140,20 @@ export function TemplatesSection({
           type="button"
           disabled={!doc.layers.length}
           onClick={() => setSaving(true)}
-          className="self-start text-[12px] text-ink-faint transition-colors hover:text-lime disabled:opacity-40"
+          className="min-h-10 self-start text-[13px] text-ink-dim transition-colors hover:text-lime disabled:opacity-40"
         >
-          + Save this canvas as a template
+          + Save this video as a starting point
         </button>
       )}
       {saving && (
-        <p className="text-[11px] leading-relaxed text-ink-faint">
+        <p className="text-[12.5px] leading-relaxed text-ink-dim">
           {slotCount
-            ? `${slotCount} layer${slotCount === 1 ? "" : "s"} marked as slots — they change per video.`
-            : "Tip: mark the parts that change per video (title, date, main video) with the Slot field in the Layer tab."}
+            ? `${slotCount} piece${slotCount === 1 ? "" : "s"} marked to change every video.`
+            : "Tip: in a piece's More controls, name the parts that change every video (title, date, main clip)."}
         </p>
       )}
-      {flash && <p className="text-[11.5px] text-lime">{flash}</p>}
+      <p role="status" className="text-[12.5px] text-lime">{flash ?? ""}</p>
       {error && <InlineError onDismiss={() => setError(null)}>{error}</InlineError>}
-    </div>
+    </section>
   );
 }

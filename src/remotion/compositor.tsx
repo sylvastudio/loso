@@ -11,6 +11,7 @@ import {
   useCurrentFrame,
   useVideoConfig,
 } from "remotion";
+import { Audio as MediaAudio, Video as MediaVideo } from "@remotion/media";
 import type { ResolvedCompositorDoc, ResolvedLayer } from "../lib/compositor";
 
 // Entrance animation → extra transform + opacity composed onto a layer's box.
@@ -84,12 +85,25 @@ function useCompositionFonts(families: string[]) {
 
 export type CompositorProps = {
   doc: ResolvedCompositorDoc;
+  // In-browser export (@remotion/web-renderer) only supports the
+  // @remotion/media <Video>/<Audio>, not <OffthreadVideo>/<Audio>.
+  webMedia?: boolean;
 };
 
-const LayerView: React.FC<{ layer: ResolvedLayer }> = ({ layer }) => {
+const LayerView: React.FC<{ layer: ResolvedLayer; webMedia: boolean }> = ({ layer, webMedia }) => {
   const entrance = useEntrance(layer);
 
   if (layer.type === "audio") {
+    if (webMedia) {
+      return (
+        <MediaAudio
+          src={layer.src}
+          trimBefore={layer.trimStart || undefined}
+          trimAfter={layer.trimEnd ?? undefined}
+          volume={layer.volume}
+        />
+      );
+    }
     return (
       <Audio
         src={layer.src}
@@ -116,6 +130,20 @@ const LayerView: React.FC<{ layer: ResolvedLayer }> = ({ layer }) => {
   };
 
   if (layer.type === "video") {
+    if (webMedia) {
+      return (
+        <div style={box}>
+          <MediaVideo
+            src={layer.src}
+            trimBefore={layer.trimStart || undefined}
+            trimAfter={layer.trimEnd ?? undefined}
+            volume={layer.volume}
+            objectFit={layer.objectFit}
+            style={{ width: "100%", height: "100%" }}
+          />
+        </div>
+      );
+    }
     return (
       <div style={box}>
         <OffthreadVideo
@@ -172,7 +200,7 @@ const LayerView: React.FC<{ layer: ResolvedLayer }> = ({ layer }) => {
   );
 };
 
-export const CompositorComposition: React.FC<CompositorProps> = ({ doc }) => {
+export const CompositorComposition: React.FC<CompositorProps> = ({ doc, webMedia = false }) => {
   useCompositionFonts(
     doc.layers.filter((l): l is Extract<ResolvedLayer, { type: "text" }> => l.type === "text").map((l) => l.fontFamily)
   );
@@ -186,7 +214,7 @@ export const CompositorComposition: React.FC<CompositorProps> = ({ doc }) => {
           durationInFrames={Math.max(1, layer.durationInFrames)}
           layout="none"
         >
-          <LayerView layer={layer} />
+          <LayerView layer={layer} webMedia={webMedia} />
         </Sequence>
       ))}
     </AbsoluteFill>

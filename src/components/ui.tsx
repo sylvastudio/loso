@@ -220,17 +220,23 @@ export function InlineError({
   children,
   onDismiss,
   className,
+  truncate = false,
 }: {
   children: ReactNode;
   onDismiss?: () => void;
   className?: string;
+  /** Clip to one line (full text in the tooltip). Off by default: errors carry the next step. */
+  truncate?: boolean;
 }) {
   return (
     <span
       role="alert"
-      className={cx("flex min-w-0 items-center gap-1.5 text-[12px] text-danger", className)}
+      className={cx("flex min-w-0 items-start gap-1.5 text-[13px] leading-snug text-danger", className)}
     >
-      <span className="min-w-0 truncate" title={typeof children === "string" ? children : undefined}>
+      <span
+        className={cx("min-w-0", truncate ? "truncate" : "whitespace-normal break-words")}
+        title={truncate && typeof children === "string" ? children : undefined}
+      >
         {children}
       </span>
       {onDismiss && (
@@ -238,7 +244,7 @@ export function InlineError({
           type="button"
           onClick={onDismiss}
           aria-label="Dismiss error"
-          className="flex h-6 w-6 shrink-0 items-center justify-center rounded text-danger/70 hover:text-danger"
+          className="-my-1 flex h-7 w-7 shrink-0 items-center justify-center rounded text-danger hover:text-ink"
         >
           ×
         </button>

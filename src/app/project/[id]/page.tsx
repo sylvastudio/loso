@@ -10,6 +10,7 @@ import { EditableTitle, NarrowScreenNote, SaveStatus, type SaveState } from "@/c
 import { FontLoader } from "@/components/font-loader";
 import { ShortComposition, SHORT_FPS } from "@/remotion/short";
 import { CompositorEditor } from "@/components/compositor/editor";
+import { serverBackend } from "@/components/compositor/server-backend";
 import { groupWords, type Word } from "@/lib/captions";
 import type { Brand } from "@/lib/brand";
 
@@ -113,7 +114,7 @@ export default function ProjectPage({ params }: { params: Promise<{ id: string }
     return <p className="py-24 text-center text-sm text-ink-faint">Loading…</p>;
   }
   if (route.kind === "compositor") {
-    return <CompositorEditor project={route.project} />;
+    return <CompositorEditor backend={serverBackend(route.project)} />;
   }
   return <AiShortEditor id={id} />;
 }

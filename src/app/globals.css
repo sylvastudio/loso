@@ -10,6 +10,7 @@
   --color-ink-dim: #8f8f97;
   --color-ink-faint: #7c7c84; /* text-safe muted (~4.6:1 on black) */
   --color-ink-ghost: #55555c; /* decoration only — never body text */
+  --color-edge: #6b6b73; /* control boundaries: fields, chips, toggles (≥3:1 on black) */
   --color-lime: #d4f53c;
   --color-lime-deep: #b8dc22;
   --color-danger: #ff5c5c;
@@ -61,7 +62,7 @@ body::after {
 .uline {
   background: transparent;
   border: 0;
-  border-bottom: 1px solid var(--color-line-strong);
+  border-bottom: 1px solid var(--color-edge);
   border-radius: 0;
   padding: 6px 0;
   width: 100%;
@@ -118,7 +119,7 @@ body::after {
   50% { opacity: 0.25; }
 }
 .blink {
-  animation: blink 1.1s steps(2, start) infinite;
+  animation: blink 1.1s steps(2, start) 3;
 }
 
 /* Range slider */
@@ -158,4 +159,70 @@ input[type="color"]::-webkit-color-swatch-wrapper { padding: 0; }
 input[type="color"]::-webkit-color-swatch {
   border: 1px solid var(--color-line-strong);
   border-radius: 999px;
+}
+
+/* ---------- Agent liveliness: one calm orb, one hairline shimmer ---------- */
+@keyframes breathe {
+  0%, 100% { opacity: 1; transform: scale(1); box-shadow: 0 0 0 0 color-mix(in srgb, var(--color-lime) 45%, transparent); }
+  50% { opacity: 0.55; transform: scale(0.82); box-shadow: 0 0 10px 2px color-mix(in srgb, var(--color-lime) 25%, transparent); }
+}
+.orb {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  flex-shrink: 0;
+  border-radius: 999px;
+  background: var(--color-lime);
+}
+.orb.idle {
+  background: transparent;
+  box-shadow: inset 0 0 0 1.5px var(--color-lime);
+}
+.orb.working {
+  animation: breathe 2.4s ease-in-out infinite;
+}
+
+@keyframes shimmer {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(250%); }
+}
+.shimmer {
+  position: relative;
+  overflow: hidden;
+  height: 1px;
+  background: var(--color-line);
+}
+.shimmer::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  width: 40%;
+  background: linear-gradient(90deg, transparent, var(--color-lime), transparent);
+  animation: shimmer 1.8s ease-in-out infinite;
+}
+
+/* Film-frame sprocket edge (versions rail) */
+.sprocket {
+  background-image: radial-gradient(circle, var(--color-line-strong) 1.2px, transparent 1.6px);
+  background-size: 6px 7px;
+  background-repeat: repeat-y;
+  background-position: center;
+}
+
+/* Composer: fade the top edge once the text scrolls */
+.fade-top {
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, black 18px);
+  mask-image: linear-gradient(to bottom, transparent 0, black 18px);
+}
+
+/* Respect reduced motion everywhere: no breathing, shimmer, rise or blink. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+  .shimmer::after { display: none; }
+  .shimmer { background: color-mix(in srgb, var(--color-lime) 50%, var(--color-line)); }
 }

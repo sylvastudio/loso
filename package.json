@@ -14,11 +14,15 @@
     "mcp": "node mcp/loso-mcp.mjs"
   },
   "dependencies": {
+    "@huggingface/transformers": "^4.3.2",
     "@remotion/bundler": "4.0.498",
+    "@remotion/media": "4.0.498",
     "@remotion/player": "4.0.498",
     "@remotion/renderer": "4.0.498",
+    "@remotion/web-renderer": "^4.0.498",
     "better-sqlite3": "^12.2.0",
     "lucide-react": "^0.525.0",
+    "mediabunny": "1.50.8",
     "next": "^15.4.4",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",

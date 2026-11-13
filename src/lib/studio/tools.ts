@@ -6,6 +6,7 @@ import { createProject, getProject, listProjects, updateProject } from "../repo"
 import { storeAsset } from "../assets";
 import { renderCompositor } from "../render";
 import { compositorDocSchema, layerSchema, type CompositorDoc, type Layer } from "../compositor";
+import { isCaption } from "../caption-set";
 import { FONT_CHOICES } from "../brand";
 import type { ToolCallResult, ToolInfo } from "./contract";
 import { contactSheet, frameAt, resolveFolder, sceneChanges, scanFolder, transcriptOf } from "./footage";
@@ -110,6 +111,7 @@ export function describeDoc(doc: CompositorDoc): string {
     .map((l) => {
       const o: Record<string, unknown> = {
         id: l.id, type: l.type, ...(l.name ? { name: l.name } : {}), ...(l.slot ? { slot: l.slot } : {}),
+        ...(isCaption(l) ? { role: "caption" } : {}),
         x: l.x, y: l.y, width: l.width, height: l.height, z: l.z,
         fromSec: s(l.from), durationSec: s(l.durationInFrames),
       };
@@ -293,13 +295,15 @@ const TOOLS: ToolSpec[] = [
     name: "add_captions",
     description:
       "Add timed captions (one short line each, ≤ ~40 chars, from→to seconds). `box` places them all " +
-      "(default: a band near the bottom); white Inter 700 on a dark translucent box.",
+      "(default: a band near the bottom); white Inter 700 on a dark translucent box. Each line is a text layer " +
+      "marked role \"caption\"; together they are the video's \"Words on screen\" set, which the user edits as one " +
+      "list. To restyle or retime captions, update every role:\"caption\" layer the same way.",
     parameters: S.obj(
       {
         captions: S.arr(S.obj({ from: N, to: N, text: T }, ["from", "to", "text"])),
         box: S.obj({ x: N, y: N, width: N, height: N }),
         fontSize: N,
-        replaceExisting: { type: "boolean", description: "remove existing 'Caption …' layers first" },
+        replaceExisting: { type: "boolean", description: "remove the existing captions (the words on screen) first" },
       },
       ["captions"]
     ),
@@ -308,14 +312,14 @@ const TOOLS: ToolSpec[] = [
       const doc = loadDoc(ctx);
       const { width: W, height: H, fps } = doc.output;
       const box = (a.box as Record<string, number>) ?? { x: Math.round(W * 0.11), y: Math.round(H * 0.73), width: Math.round(W * 0.78), height: 92 };
-      const base = a.replaceExisting ? doc.layers.filter((l) => !/^Caption \d+/.test(l.name ?? "")) : doc.layers;
+      const base = a.replaceExisting ? doc.layers.filter((l) => !isCaption(l)) : doc.layers;
       const z = base.length ? Math.max(...base.map((l) => l.z)) + 1 : 0;
       const caps = (Array.isArray(a.captions) ? a.captions : []) as Array<{ from: number; to: number; text: string }>;
       const taken = new Set(base.map((l) => l.id));
       const added = caps.map((c, i) =>
         completeLayer(
           {
-            type: "text", name: `Caption ${i + 1}`, text: c.text, ...box, z,
+            type: "text", role: "caption", name: `Caption ${i + 1}`, text: c.text, ...box, z,
             fromSec: num(c.from), durationSec: Math.max(1 / fps, num(c.to) - num(c.from)),
             fontFamily: "Inter", fontSize: num(a.fontSize, 36), fontWeight: 700, color: "#ffffff",
             align: "center", backgroundColor: "rgba(8,8,10,0.62)", anim: { preset: "fade", delay: 0, duration: 4 },
@@ -560,8 +564,10 @@ const TOOLS: ToolSpec[] = [
   {
     name: "ask_user",
     description:
-      "Ask the user 1–4 questions before making decisions that are theirs (text on the design, sound, style, which " +
-      "moments matter). Each question can offer options; the user may also type their own answer. Waits for answers.",
+      "Rarely needed: ask 1–3 questions only when you can't proceed sensibly without facts only the user knows (a " +
+      "name, which file is which). Decide style, fonts, colours, timing and layout yourself instead. Always give 2–4 " +
+      "options (your best guesses, recommendation first); the user can also type an answer or let you decide. " +
+      "Waits for answers. Never ask questions in plain chat text — use this tool.",
     parameters: S.obj(
       {
         questions: S.arr(

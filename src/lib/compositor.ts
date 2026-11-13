@@ -17,6 +17,12 @@ const baseLayer = {
   // Template slot: when this composition is saved as a template, slot layers
   // are the parts a new video fills in (a title, a date, the main video…).
   slot: z.string().optional(),
+  // What the layer is for, when it belongs to a set. "caption" = one line of
+  // the video's words on screen (subtitles); the editor folds them into one
+  // "Words on screen" set. Optional, so older docs parse unchanged, and the
+  // renderer ignores it. Legacy "Caption N" text layers count as captions too
+  // (see isCaption in src/lib/caption-set.ts).
+  role: z.enum(["caption"]).optional(),
   x: z.number().default(0),
   y: z.number().default(0),
   width: z.number().default(200),
@@ -32,6 +38,8 @@ const baseLayer = {
   anim: animSchema.optional(),
 };
 
+// Media layers' `assetHash` names the file: a content hash for server
+// projects, the file's path inside the project folder for local projects.
 export const videoLayerSchema = z.object({
   ...baseLayer,
   type: z.literal("video"),
@@ -127,6 +135,24 @@ export interface ResolvedCompositorDoc {
 
 export function assetUrl(hash: string): string {
   return `/api/assets/${hash}`;
+}
+
+export function mediaRefs(doc: CompositorDoc): string[] {
+  return Array.from(new Set(doc.layers.flatMap((l) => (l.type === "text" ? [] : [l.assetHash]))));
+}
+
+// Resolve with a lookup of ready URLs (local projects: blob URLs for files in
+// the project folder). Media layers whose file isn't available are left out,
+// so a missing clip never breaks the preview or the export.
+export function resolveDocWith(doc: CompositorDoc, urls: Record<string, string | null | undefined>): ResolvedCompositorDoc {
+  return {
+    output: doc.output,
+    layers: doc.layers.flatMap((l): ResolvedLayer[] => {
+      if (l.type === "text") return [l];
+      const src = urls[l.assetHash];
+      return src ? [{ ...l, src }] : [];
+    }),
+  };
 }
 
 // Resolve for the browser Player: media hashes -> /api/assets/<hash> URLs.

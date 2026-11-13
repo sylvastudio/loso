@@ -2,29 +2,13 @@ import "server-only";
 import crypto from "node:crypto";
 import { getDb } from "../db";
 import { compositorDocSchema, type CompositorDoc } from "../compositor";
+import { slotsOf, type Template } from "../templates-core";
 
 // ---------- templates ----------
 // A template is a saved composition. Layers carrying `slot` are the parts a
 // new video fills in; everything else (card, rules, badges…) is fixed design.
 
-export interface TemplateSlot {
-  name: string;
-  layerId: string;
-  kind: "text" | "video" | "image" | "audio";
-  /** Current text (for text slots) — doubles as the example value. */
-  example?: string;
-}
-
-export interface Template {
-  id: string;
-  name: string;
-  description: string;
-  doc: CompositorDoc;
-  slots: TemplateSlot[];
-  builtin: boolean;
-  createdAt: number;
-  updatedAt: number;
-}
+export type { Template, TemplateSlot } from "../templates-core";
 
 interface TemplateRow {
   id: string;
@@ -34,17 +18,6 @@ interface TemplateRow {
   builtin: number;
   created_at: number;
   updated_at: number;
-}
-
-export function slotsOf(doc: CompositorDoc): TemplateSlot[] {
-  return doc.layers
-    .filter((l) => l.slot)
-    .map((l) => ({
-      name: l.slot!,
-      layerId: l.id,
-      kind: l.type,
-      example: l.type === "text" ? l.text : undefined,
-    }));
 }
 
 function rowToTemplate(r: TemplateRow): Template {

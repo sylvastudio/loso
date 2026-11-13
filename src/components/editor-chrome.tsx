@@ -38,7 +38,7 @@ export function EditableTitle({
         }
       }}
       size={Math.max(8, Math.min(40, draft.length + 1))}
-      className="min-w-0 border-b border-transparent bg-transparent font-serif text-[16px] italic tracking-tight text-ink outline-none transition-colors hover:border-line-strong focus:border-lime"
+      className="min-w-0 border-b border-transparent bg-transparent font-serif text-[18px] italic tracking-tight text-ink outline-none transition-colors hover:border-line-strong focus:border-lime"
     />
   );
 }
@@ -54,18 +54,21 @@ export function SaveStatus({ state, onRetry }: { state: SaveState; onRetry?: () 
       <button
         type="button"
         onClick={onRetry}
-        className="micro !text-danger underline-offset-2 hover:underline"
+        className="min-h-8 text-[12.5px] text-danger underline-offset-2 hover:underline"
         role="alert"
       >
-        Save failed — retry
+        Couldn&rsquo;t save. Try again
       </button>
     );
   }
   return (
-    <span
-      className={cx("micro", state === "saved" ? "text-ink-faint" : "text-ink-dim")}
-      aria-live="polite"
-    >
+    // Visual only: a polite region that flips every 400ms of typing would
+    // make screen readers chatty. Failures still announce (role=alert above).
+    <span className="flex shrink-0 items-center gap-1.5 text-[12.5px] text-ink-dim">
+      <span
+        aria-hidden
+        className={cx("h-1.5 w-1.5 rounded-full", state === "saved" ? "bg-lime/70" : "bg-ink-faint")}
+      />
       {state === "saved" ? "Saved" : "Saving…"}
     </span>
   );
@@ -78,7 +81,7 @@ export function NarrowScreenNote() {
   return (
     <div className="border-b border-line bg-panel px-5 py-2.5 md:hidden">
       <p className="font-serif text-[14px] italic text-ink-dim">
-        Loso&rsquo;s editor is built for a desktop-width window — widen it for the full canvas.
+        Loso works best in a wide window on a computer. Make this window wider to see everything.
       </p>
     </div>
   );

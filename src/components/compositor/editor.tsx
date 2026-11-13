@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import Link from "next/link";
-import { Player } from "@remotion/player";
+import { Player, type PlayerRef } from "@remotion/player";
 import {
   AlignCenterHorizontal,
   AlignCenterVertical,
@@ -15,48 +15,59 @@ import {
   ChevronUp,
   Download,
   Film,
+  FolderOpen,
+  History as HistoryIcon,
   Image as ImageIcon,
   Loader2,
   Music,
+  PanelLeft,
+  Plus,
   Redo2,
-  Sparkles,
-  SlidersHorizontal,
+  Square,
   Trash2,
   Type as TypeIcon,
   Undo2,
+  Settings2,
 } from "lucide-react";
-import { Button, Field, InlineError, Select, cx } from "@/components/ui";
+import { Button, InlineError, Select, cx } from "@/components/ui";
 import { FontLoader } from "@/components/font-loader";
 import { EditableTitle, NarrowScreenNote, SaveStatus, type SaveState } from "@/components/editor-chrome";
-import { fetchJson, jsonInit } from "@/lib/fetch-json";
-import { ChatPanel } from "@/components/agent/chat-panel";
+import { ChatPanel, STARTERS, type ChatControl } from "@/components/agent/chat-panel";
+import { LocalChat } from "@/components/agent/local-chat";
+import { ChatDock, IDLE_STATUS, dockSafeArea, useAnnouncer, useDockState, type DockStatus } from "@/components/agent/chat-dock";
 import { TemplatesSection } from "@/components/compositor/templates-section";
+import { FolderTray } from "@/components/compositor/folder-tray";
+import { VersionsPanel } from "@/components/compositor/versions-panel";
+import { DropOverlay, useWindowFileDrag } from "@/components/compositor/drop-overlay";
+import { PointAtIt, PointAtItButton } from "@/components/compositor/point-at-it";
+import { useLosoInbox } from "@/components/compositor/loso-inbox";
+import { useSettingsMode, useSettingsSheet } from "@/components/settings/settings-sheet";
+import { clock, historyReducer, initialHistory, timeline, type DocUpdater } from "@/components/compositor/history";
+import type { EditorBackend } from "@/components/compositor/backend";
+import { WordsOnScreen } from "@/components/compositor/words-on-screen";
+import { WordsIcon, WordsPiecesRow, WordsStoryRow } from "@/components/compositor/words-strip";
+import { isCaption, styleAll } from "@/lib/caption-set";
 import { CompositorComposition } from "@/remotion/compositor";
 import { FONT_CHOICES } from "@/lib/brand";
 import {
   OUTPUT_PRESETS,
   compositorDocSchema,
   emptyCompositorDoc,
-  resolveDocForBrowser,
+  mediaRefs,
+  resolveDocWith,
   type Anim,
   type CompositorDoc,
   type Layer,
 } from "@/lib/compositor";
 
-interface ProjectShape {
-  id: string;
-  title: string;
-  updatedAt: number;
-  settings: { kind?: string; compositor?: CompositorDoc };
-  artifacts: { render?: { url: string; renderedAt: number } };
-}
-
 const TYPE_ICON = { video: Film, image: ImageIcon, audio: Music, text: TypeIcon } as const;
+const KIND_WORD = { video: "Video", image: "Picture", audio: "Sound", text: "Words" } as const;
+const SHAPE_WORD: Record<string, string> = { "9x16": "Phone (tall)", "16x9": "TV (wide)", "1x1": "Square", "4x5": "Tall post" };
 
 function layerLabel(l: Layer): string {
   if (l.name) return l.name;
-  if (l.type === "text") return l.text || "Text";
-  return l.type;
+  if (l.type === "text") return l.text || "Words";
+  return KIND_WORD[l.type];
 }
 
 function safeFileName(title: string) {
@@ -71,29 +82,48 @@ function newId(prefix: string) {
 
 // ---------- small inspector controls ----------
 
+/** A number field that keeps what you type (no jump to 0 while it's empty). */
 function NumRow({
   label,
   value,
   onChange,
   step = 1,
   min,
+  wide,
 }: {
   label: string;
   value: number;
   onChange: (v: number) => void;
   step?: number;
   min?: number;
+  wide?: boolean;
 }) {
+  const shown = Number.isFinite(value) ? String(Math.round(value * 100) / 100) : "0";
+  const [text, setText] = useState(shown);
+  const focused = useRef(false);
+  useEffect(() => {
+    if (!focused.current) setText(shown);
+  }, [shown]);
   return (
     <label className="flex items-center gap-2">
-      <span className="micro w-[52px] shrink-0">{label}</span>
+      <span className={cx("shrink-0 text-[12.5px] text-ink-dim", wide ? "w-[92px]" : "w-[58px]")}>{label}</span>
       <input
         type="number"
-        value={Number.isFinite(value) ? value : 0}
+        value={text}
         step={step}
         min={min}
-        onChange={(e) => onChange(Number(e.target.value))}
-        className="uline !py-1 text-[13px]"
+        onFocus={() => (focused.current = true)}
+        onBlur={() => {
+          focused.current = false;
+          setText(shown);
+        }}
+        onChange={(e) => {
+          setText(e.target.value);
+          const n = Number(e.target.value);
+          if (e.target.value.trim() !== "" && Number.isFinite(n)) onChange(n);
+        }}
+        onKeyDown={(e) => e.key === "Enter" && e.currentTarget.blur()}
+        className="uline !py-1 text-[13.5px]"
       />
     </label>
   );
@@ -116,10 +146,11 @@ function SliderRow({
 }) {
   return (
     <div className="flex items-center gap-2.5">
-      <span className="micro w-[52px] shrink-0">{label}</span>
+      <span className="w-[92px] shrink-0 text-[12.5px] text-ink-dim">{label}</span>
       <input
         type="range"
         aria-label={label}
+        aria-valuetext={`${Math.round(value * 100)}%`}
         min={min}
         max={max}
         step={step}
@@ -127,66 +158,41 @@ function SliderRow({
         onChange={(e) => onChange(Number(e.target.value))}
         className="flex-1"
       />
-      <span className="w-8 text-right font-mono text-[11px] text-ink-dim">{value.toFixed(2)}</span>
+      <span className="w-10 text-right font-mono text-[12px] text-ink-dim">{Math.round(value * 100)}%</span>
     </div>
   );
 }
 
-// ---------- undo/redo history ----------
-// Rapid edits (dragging, sliders) within COALESCE_MS collapse into a single
-// undo step so one drag isn't dozens of entries; discrete edits each get one.
+function RailHeading({ children, id }: { children: React.ReactNode; id?: string }) {
+  return (
+    <h2 id={id} className="font-mono text-[11px] uppercase tracking-[0.12em] text-ink-dim">
+      {children}
+    </h2>
+  );
+}
 
-type DocUpdater = CompositorDoc | ((d: CompositorDoc) => CompositorDoc);
-// `group` tags the present entry when it came from outside the editor (an
-// agent turn, an MCP edit): consecutive changes with the same group collapse
-// into one undo step, so "undo" reverts a whole agent turn at once.
-type History = { past: CompositorDoc[]; present: CompositorDoc; future: CompositorDoc[]; ts: number; group?: string };
-type HistoryAction =
-  | { type: "set"; updater: DocUpdater }
-  | { type: "external"; doc: CompositorDoc; group: string }
-  | { type: "undo" }
-  | { type: "redo" };
-
-const COALESCE_MS = 450;
-const HISTORY_LIMIT = 100;
-
-function historyReducer(s: History, a: HistoryAction): History {
-  switch (a.type) {
-    case "undo": {
-      if (!s.past.length) return s;
-      const prev = s.past[s.past.length - 1];
-      return { past: s.past.slice(0, -1), present: prev, future: [s.present, ...s.future], ts: 0 };
-    }
-    case "redo": {
-      if (!s.future.length) return s;
-      const next = s.future[0];
-      return { past: [...s.past, s.present], present: next, future: s.future.slice(1), ts: 0 };
-    }
-    case "external": {
-      if (s.group === a.group) return { ...s, present: a.doc, future: [], ts: 0 };
-      return { past: [...s.past, s.present].slice(-HISTORY_LIMIT), present: a.doc, future: [], ts: 0, group: a.group };
-    }
-    case "set": {
-      const next =
-        typeof a.updater === "function"
-          ? (a.updater as (d: CompositorDoc) => CompositorDoc)(s.present)
-          : a.updater;
-      if (next === s.present) return s;
-      const now = Date.now();
-      if (s.ts !== 0 && now - s.ts < COALESCE_MS) {
-        return { ...s, present: next, ts: now }; // coalesce into current step
-      }
-      return { past: [...s.past, s.present].slice(-HISTORY_LIMIT), present: next, future: [], ts: now };
-    }
+function readFlag(key: string, fallback: boolean) {
+  try {
+    const v = localStorage.getItem(key);
+    return v === null ? fallback : v === "1";
+  } catch {
+    return fallback;
+  }
+}
+function writeFlag(key: string, v: boolean) {
+  try {
+    localStorage.setItem(key, v ? "1" : "0");
+  } catch {
+    /* ignore */
   }
 }
 
 // ---------- editor ----------
 
-export function CompositorEditor({ project }: { project: ProjectShape }) {
-  const [hist, dispatch] = useReducer(historyReducer, undefined, (): History => {
-    const parsed = compositorDocSchema.safeParse(project.settings.compositor);
-    return { past: [], present: parsed.success ? parsed.data : emptyCompositorDoc(), future: [], ts: 0 };
+export function CompositorEditor({ backend }: { backend: EditorBackend }) {
+  const [hist, dispatch] = useReducer(historyReducer, undefined, () => {
+    const parsed = compositorDocSchema.safeParse(backend.doc);
+    return initialHistory(parsed.success ? parsed.data : emptyCompositorDoc());
   });
   const doc = hist.present;
   const setDoc = useCallback((u: DocUpdater) => dispatch({ type: "set", updater: u }), []);
@@ -197,37 +203,79 @@ export function CompositorEditor({ project }: { project: ProjectShape }) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [stageBox, setStageBox] = useState({ w: 0, h: 0 });
   const [uploading, setUploading] = useState<{ i: number; n: number; name: string } | null>(null);
-  const [dragOver, setDragOver] = useState(false);
-  const dragDepth = useRef(0);
   const [rendering, setRendering] = useState(false);
+  const [folderVersion, setFolderVersion] = useState(0); // bumps after files are added to the folder
   const [renderElapsed, setRenderElapsed] = useState(0);
-  const [renderUrl, setRenderUrl] = useState<string | null>(project.artifacts.render?.url ?? null);
+  const [renderProgress, setRenderProgress] = useState<number | null>(null);
+  const [renderUrl, setRenderUrl] = useState<string | null>(backend.lastExport?.url ?? null);
+  const [savedAs, setSavedAs] = useState<string | null>(backend.lastExport?.savedAs ?? null);
   // The doc the current export was rendered from. Any later edit makes the
-  // download stale. On load, an export is current only if nothing was saved
-  // after it (render writes updatedAt ≈ renderedAt).
-  const [renderedDoc, setRenderedDoc] = useState<CompositorDoc | null>(() => {
-    const r = project.artifacts.render;
-    return r && project.updatedAt - r.renderedAt < 2000 ? hist.present : null;
-  });
+  // download stale; the backend says whether the last export is current.
+  const [renderedDoc, setRenderedDoc] = useState<CompositorDoc | null>(() =>
+    backend.lastExport?.current ? hist.present : null
+  );
   const [error, setError] = useState<string | null>(null);
-  const [title, setTitle] = useState(project.title);
+  const [title, setTitle] = useState(backend.title);
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [saveState, setSaveState] = useState<SaveState>("idle");
-  const [rightTab, setRightTab] = useState<"layer" | "agent">(
-    project.settings.compositor?.layers?.length ? "layer" : "agent"
-  );
   const [agentBusy, setAgentBusy] = useState(false);
-  // updatedAt of the newest server copy we know about (ours or adopted)
-  const lastSeen = useRef(project.updatedAt);
+  const [dockStatus, setDockStatus] = useState<DockStatus>(IDLE_STATUS);
+  const [versionsOpen, setVersionsOpen] = useState(false);
+  const [previewIndex, setPreviewIndex] = useState<number | null>(null);
+  const [railOpen, setRailOpenRaw] = useState(true);
+  const [storyOpen, setStoryOpenRaw] = useState(false);
+  const [agentFocus, setAgentFocus] = useState<string[]>([]);
+  // "Words on screen": the captions manager in the rail (see words-on-screen.tsx)
+  const [wordsOpen, setWordsOpen] = useState(false);
+  const playerRef = useRef<PlayerRef>(null);
+  // updatedAt of the newest saved copy we know about (ours or adopted)
+  const lastSeen = useRef(backend.updatedAt);
+  const dock = useDockState(backend.projectId);
+  const { message: announcement, announce } = useAnnouncer();
+  const chat = useRef<ChatControl | null>(null);
+  const dragTypes = useWindowFileDrag();
 
   const stageRef = useRef<HTMLDivElement>(null);
-  const stageColRef = useRef<HTMLDivElement>(null);
-  const firstRender = useRef(true);
+  const stageSectionRef = useRef<HTMLElement>(null);
+  const railRef = useRef<HTMLElement>(null);
+  const versionsBtnRef = useRef<HTMLButtonElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const pendingKind = useRef<"video" | "image" | "audio">("image");
+  // The doc we opened with: no save until it actually changes. (A "first
+  // render" flag is not enough: React's dev StrictMode runs effects twice, so
+  // merely opening the editor used to save the doc back — "Saving…" on open.)
+  const openedDoc = useRef(doc);
+
+  useEffect(() => {
+    setRailOpenRaw(readFlag("loso:rail", true));
+    setStoryOpenRaw(readFlag("loso:story", false));
+  }, []);
+  const setRailOpen = (v: boolean) => {
+    setRailOpenRaw(v);
+    writeFlag("loso:rail", v);
+  };
+  const setStoryOpen = (v: boolean) => {
+    setStoryOpenRaw(v);
+    writeFlag("loso:story", v);
+  };
 
   const { output, layers } = doc;
   const selected = layers.find((l) => l.id === selectedId) ?? null;
+
+  // Picking a piece (from the story strip) brings the rail back to edit it.
+  useEffect(() => {
+    if (selectedId) setRailOpenRaw(true);
+  }, [selectedId]);
+  // Picking a caption opens the words-on-screen manager at that line;
+  // picking anything else goes back to the usual inspector.
+  const selectedIsCaption = !!selected && isCaption(selected);
+  useEffect(() => {
+    if (selectedId) setWordsOpen(selectedIsCaption);
+  }, [selectedId, selectedIsCaption]);
+  const showWords = wordsOpen && (!selected || selectedIsCaption);
+  const changeWords = useCallback(
+    (updater: (d: CompositorDoc) => CompositorDoc, label: string) => dispatch({ type: "set", updater, label }),
+    []
+  );
 
   // ---- persistence (debounced full-doc save, flushable) ----
   // The latest unsaved doc lives in pendingDoc; flush() writes it now. Export
@@ -243,15 +291,14 @@ export function CompositorEditor({ project }: { project: ProjectShape }) {
       const d = pendingDoc.current;
       if (!d) return true;
       pendingDoc.current = null;
-      const init = jsonInit("PATCH", { settings: { kind: "compositor", compositor: d } });
       if (keepalive) {
-        fetch(`/api/projects/${project.id}`, { ...init, keepalive: true }).catch(() => {});
+        backend.save(d, { keepalive: true }).catch(() => {});
         return true;
       }
       setSaveState("saving");
       try {
-        const saved = await fetchJson<{ project: { updatedAt: number } }>(`/api/projects/${project.id}`, init);
-        lastSeen.current = Math.max(lastSeen.current, saved.project.updatedAt);
+        const updatedAt = await backend.save(d, { keepalive: false });
+        lastSeen.current = Math.max(lastSeen.current, updatedAt);
         setSaveState(pendingDoc.current ? "dirty" : "saved");
         return true;
       } catch {
@@ -260,14 +307,11 @@ export function CompositorEditor({ project }: { project: ProjectShape }) {
         return false;
       }
     },
-    [project.id]
+    [backend]
   );
 
   useEffect(() => {
-    if (firstRender.current) {
-      firstRender.current = false;
-      return;
-    }
+    if (doc === openedDoc.current) return;
     pendingDoc.current = doc;
     setSaveState("dirty");
     if (saveTimer.current) clearTimeout(saveTimer.current);
@@ -283,13 +327,14 @@ export function CompositorEditor({ project }: { project: ProjectShape }) {
     };
   }, [flush]);
 
-  // ---- measure stage for scaling ----
+  // ---- measure the stage's safe area for scaling ----
+  // The dock floats over the stage (no reflow); the frame centres in the
+  // space left of it.
+  const safeRight = dockSafeArea(dock.state, dock.width);
   useEffect(() => {
     const el = stageRef.current;
     if (!el) return;
-    const ro = new ResizeObserver(() => {
-      setStageBox({ w: el.clientWidth, h: el.clientHeight });
-    });
+    const ro = new ResizeObserver(() => setStageBox({ w: el.clientWidth, h: el.clientHeight }));
     ro.observe(el);
     setStageBox({ w: el.clientWidth, h: el.clientHeight });
     return () => ro.disconnect();
@@ -302,32 +347,56 @@ export function CompositorEditor({ project }: { project: ProjectShape }) {
   const dispW = output.width * fit;
   const dispH = output.height * fit;
 
-  const resolved = useMemo(() => resolveDocForBrowser(doc), [doc]);
+  // ---- versions preview ----
+  const versions = useMemo(() => timeline(hist), [hist]);
+  const preview = previewIndex !== null ? (versions[previewIndex] ?? null) : null;
+  const shownDoc = preview && !preview.current ? preview.doc : doc;
+  const previewing = shownDoc !== doc;
+  const onPreview = useCallback((i: number | null) => setPreviewIndex(i), []);
+
+  // Asset URLs by ref. Local projects resolve to blob URLs for files in the
+  // folder (null = the file is missing); server projects to /api/assets.
+  const [assetUrls, setAssetUrls] = useState<Record<string, string | null>>({});
+  const refsKey = [...new Set([...mediaRefs(doc), ...mediaRefs(shownDoc)])].join("\u0000");
+  useEffect(() => {
+    const want = refsKey ? refsKey.split("\u0000") : [];
+    const missing = want.filter((r) => !(r in assetUrls));
+    if (!missing.length) return;
+    let cancelled = false;
+    backend.assetUrls(missing).then((urls) => {
+      if (!cancelled) setAssetUrls((prev) => ({ ...prev, ...urls }));
+    });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [refsKey, backend]);
+  const resolved = useMemo(() => resolveDocWith(shownDoc, assetUrls), [shownDoc, assetUrls]);
 
   // ---- doc mutations ----
   const setOutput = useCallback((patch: Partial<CompositorDoc["output"]>) => {
     setDoc((d) => ({ ...d, output: { ...d.output, ...patch } }));
-  }, []);
+  }, [setDoc]);
 
   const patchLayer = useCallback((id: string, patch: Partial<Layer>) => {
     setDoc((d) => ({
       ...d,
       layers: d.layers.map((l) => (l.id === id ? ({ ...l, ...patch } as Layer) : l)),
     }));
-  }, []);
+  }, [setDoc]);
 
   const addLayer = useCallback(
     (layer: Layer) => {
       setDoc((d) => ({ ...d, layers: [...d.layers, layer] }));
       setSelectedId(layer.id);
     },
-    []
+    [setDoc]
   );
 
   const removeLayer = useCallback((id: string) => {
     setDoc((d) => ({ ...d, layers: d.layers.filter((l) => l.id !== id) }));
     setSelectedId((s) => (s === id ? null : s));
-  }, []);
+  }, [setDoc]);
 
   const reorder = useCallback((id: string, dir: 1 | -1) => {
     setDoc((d) => {
@@ -340,7 +409,7 @@ export function CompositorEditor({ project }: { project: ProjectShape }) {
       sorted[swap] = { ...sorted[swap], z: zi };
       return { ...d, layers: sorted };
     });
-  }, []);
+  }, [setDoc]);
 
   const nextZ = () => (layers.length ? Math.max(...layers.map((l) => l.z)) + 1 : 0);
 
@@ -384,40 +453,53 @@ export function CompositorEditor({ project }: { project: ProjectShape }) {
   // ---- changes from outside the editor (the agent, MCP clients) ----
   const docRef = useRef(doc);
   docRef.current = doc;
-  const adoptExternal = useCallback((next: CompositorDoc, group: string) => {
+  const adoptExternal = useCallback((next: CompositorDoc, group: string, label?: string) => {
     const parsed = compositorDocSchema.safeParse(next);
     if (!parsed.success) return;
     if (JSON.stringify(parsed.data) === JSON.stringify(docRef.current)) return;
-    dispatch({ type: "external", doc: parsed.data, group });
+    dispatch({ type: "external", doc: parsed.data, group, label });
   }, []);
 
   const syncFromServer = useCallback(
     async (group: string) => {
-      if (pendingDoc.current) return;
+      if (pendingDoc.current || !backend.fetchLatest) return;
       try {
-        const d = await fetchJson<{ project: ProjectShape & { updatedAt: number } }>(`/api/projects/${project.id}`);
-        if (d.project.updatedAt <= lastSeen.current) return;
-        lastSeen.current = d.project.updatedAt;
-        if (d.project.settings.compositor) adoptExternal(d.project.settings.compositor, group);
+        const d = await backend.fetchLatest();
+        if (d.updatedAt <= lastSeen.current) return;
+        lastSeen.current = d.updatedAt;
+        if (d.doc) adoptExternal(d.doc, group);
       } catch {
         /* offline — try again next tick */
       }
     },
-    [project.id, adoptExternal]
+    [backend, adoptExternal]
   );
 
   // Poll for edits made by external agents (MCP) while the tab is idle.
   useEffect(() => {
-    if (agentBusy) return;
+    if (agentBusy || !backend.fetchLatest) return;
     const t = setInterval(() => {
       if (document.visibilityState === "visible") syncFromServer(`ext-${Date.now() >> 14}`);
     }, 4000);
     return () => clearInterval(t);
-  }, [agentBusy, syncFromServer]);
+  }, [agentBusy, syncFromServer, backend]);
 
+  // Live highlight: the pieces the agent just touched get a lime outline on
+  // the stage for a moment (at most 3), with the words in the status line.
+  const focusTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const onAgentDoc = useCallback(
     (next: CompositorDoc, turn: string) => {
       lastSeen.current = Date.now();
+      const before = new Map(docRef.current.layers.map((l) => [l.id, JSON.stringify(l)]));
+      const touched = next.layers
+        .filter((l) => l.type !== "audio" && before.get(l.id) !== JSON.stringify(l))
+        .map((l) => l.id)
+        .slice(0, 3);
+      if (touched.length) {
+        setAgentFocus(touched);
+        if (focusTimer.current) clearTimeout(focusTimer.current);
+        focusTimer.current = setTimeout(() => setAgentFocus([]), 1600);
+      }
       adoptExternal(next, `agent-${turn}`);
     },
     [adoptExternal]
@@ -430,9 +512,9 @@ export function CompositorEditor({ project }: { project: ProjectShape }) {
   const canUndoTurn = useCallback((turn: string) => hist.group === `agent-${turn}`, [hist.group]);
 
   // ---- keyboard ----
-  // ⌘Z / ⇧⌘Z undo·redo, Delete/Backspace remove, arrows nudge (⇧ = 10px),
-  // ⌘D duplicate, [ / ] send back·bring forward, Esc deselect. Skipped while
-  // typing so inputs keep their native behavior.
+  // ⌘Z / ⇧⌘Z undo·redo anywhere outside text fields. Single keys (Delete,
+  // arrows, [ ]) only act when focus is on the stage or the pieces list, so
+  // they never fire by accident from a button or a speech command.
   const agentBusyRef = useRef(false);
   agentBusyRef.current = agentBusy;
   const onKeyRef = useRef<(e: KeyboardEvent) => void>(() => {});
@@ -448,6 +530,9 @@ export function CompositorEditor({ project }: { project: ProjectShape }) {
       else undo();
       return;
     }
+    const scoped =
+      !t || t === document.body || !!stageSectionRef.current?.contains(t) || !!t.closest?.("[data-pieces]");
+    if (!scoped) return;
     if (e.key === "Escape") {
       setSelectedId(null);
       return;
@@ -463,12 +548,12 @@ export function CompositorEditor({ project }: { project: ProjectShape }) {
       reorder(selected.id, -1);
     } else if (e.key === "]") {
       reorder(selected.id, 1);
-    } else if (e.key.startsWith("Arrow") && selected.type !== "audio") {
+    } else if (e.key.startsWith("Arrow") && selected.type !== "audio" && !t?.closest?.("[data-pieces]")) {
       e.preventDefault();
       const step = e.shiftKey ? 10 : 1;
       const dx = e.key === "ArrowLeft" ? -step : e.key === "ArrowRight" ? step : 0;
       const dy = e.key === "ArrowUp" ? -step : e.key === "ArrowDown" ? step : 0;
-      patchLayer(selected.id, { x: selected.x + dx, y: selected.y + dy });
+      placeSelected(selected.id, { x: selected.x + dx, y: selected.y + dy });
     }
   };
   useEffect(() => {
@@ -494,7 +579,7 @@ export function CompositorEditor({ project }: { project: ProjectShape }) {
       radius: 0,
       borderWidth: 0,
       borderColor: "#ffffff",
-      text: "Your copy here",
+      text: "Your words here",
       fontFamily: FONT_CHOICES[0],
       fontSize: Math.round(output.width * 0.08),
       color: "#ffffff",
@@ -551,14 +636,10 @@ export function CompositorEditor({ project }: { project: ProjectShape }) {
   }
 
   async function uploadFile(file: File): Promise<string | null> {
-    const fd = new FormData();
-    fd.append("file", file);
-    fd.append("kind", "compositor");
     try {
-      const d = await fetchJson<{ asset: { hash: string } }>("/api/assets", { method: "POST", body: fd });
-      return d.asset.hash;
+      return await backend.importFile(file);
     } catch (e) {
-      setError(`Couldn't upload ${file.name} — ${(e as Error).message}`);
+      setError(`Couldn't add ${file.name}. ${(e as Error).message}`);
       return null;
     }
   }
@@ -581,24 +662,30 @@ export function CompositorEditor({ project }: { project: ProjectShape }) {
         const hash = await uploadFile(file);
         if (hash) addMediaLayer(kindFromMime(file.type)!, hash, file.name.replace(/\.[^.]+$/, ""));
       }
+      if (usable.length) announce(`Added ${usable.length === 1 ? usable[0].name : `${usable.length} files`} to your video`);
     } finally {
       setUploading(null);
+      setFolderVersion((v) => v + 1);
     }
     if (skipped.length) {
-      setError(`Skipped ${skipped.join(", ")} — only video, image, and audio files can be added.`);
+      setError(`Skipped ${skipped.join(", ")}. Only videos, pictures and sounds can go in the video.`);
     }
   }
 
-  function pickFile(kind: "video" | "image" | "audio") {
-    pendingKind.current = kind;
+  function pickFiles() {
     const input = fileInputRef.current;
     if (!input) return;
-    input.accept = kind === "video" ? "video/*" : kind === "audio" ? "audio/*" : "image/*";
     input.value = "";
     input.click();
   }
 
   // ---- drag interactions on the stage ----
+  // Captions are one set: moving or resizing one on the stage places them all.
+  function placeSelected(id: string, patch: Partial<Pick<Layer, "x" | "y" | "width" | "height">>) {
+    if (selectedIsCaption) changeWords((d) => styleAll(d, patch), "Moved the words on screen");
+    else patchLayer(id, patch);
+  }
+
   function beginMove(e: React.PointerEvent) {
     if (!selected || selected.type === "audio" || !fit) return;
     e.preventDefault();
@@ -607,7 +694,7 @@ export function CompositorEditor({ project }: { project: ProjectShape }) {
     const sx = e.clientX;
     const sy = e.clientY;
     const move = (ev: PointerEvent) => {
-      patchLayer(id, {
+      placeSelected(id, {
         x: Math.round(x + (ev.clientX - sx) / fit),
         y: Math.round(y + (ev.clientY - sy) / fit),
       });
@@ -644,7 +731,7 @@ export function CompositorEditor({ project }: { project: ProjectShape }) {
         nh = Math.max(20, height - dy);
         ny = y + (height - nh);
       }
-      patchLayer(id, {
+      placeSelected(id, {
         x: Math.round(nx),
         y: Math.round(ny),
         width: Math.round(nw),
@@ -681,64 +768,138 @@ export function CompositorEditor({ project }: { project: ProjectShape }) {
     return () => clearInterval(t);
   }, [rendering]);
 
+  // Announce export progress in 25% steps only.
+  const lastQuarter = useRef(-1);
+  useEffect(() => {
+    if (renderProgress === null) return;
+    const q = Math.floor(renderProgress * 4);
+    if (q > lastQuarter.current && q > 0 && q < 4) announce(`Making the video, ${q * 25} percent`);
+    lastQuarter.current = q;
+  }, [renderProgress, announce]);
+
   async function exportVideo() {
     setError(null);
     setRendering(true);
+    lastQuarter.current = -1;
+    announce("Making the video. Keep this tab open.");
     try {
       // Render reads the saved doc, so make sure the latest edit is saved first.
-      if (!(await flush())) throw new Error("Couldn't save your latest changes, so export was stopped");
+      if (!(await flush())) throw new Error("Couldn't save your latest changes, so making the video was stopped.");
       const exported = doc;
-      const d = await fetchJson<{ url: string }>(`/api/projects/${project.id}/render`, { method: "POST" });
+      const d = await backend.exportVideo(exported, setRenderProgress);
       setRenderUrl(d.url);
+      setSavedAs(d.savedAs ?? null);
       setRenderedDoc(exported);
+      announce(`Your video is ready.${d.savedAs ? ` It's saved in your folder as ${d.savedAs}.` : ""}`);
     } catch (e) {
       setError((e as Error).message);
     } finally {
       setRendering(false);
+      setRenderProgress(null);
     }
   }
   const renderStale = !!renderUrl && renderedDoc !== doc;
 
   const sortedLayers = [...layers].sort((a, b) => b.z - a.z); // top layer first in the list
   const durationSec = output.durationInFrames / output.fps;
-  const activePreset = OUTPUT_PRESETS.find(
-    (p) => p.width === output.width && p.height === output.height
-  );
-
+  const activePreset = OUTPUT_PRESETS.find((p) => p.width === output.width && p.height === output.height);
   const textFamilies = layers.filter((l) => l.type === "text").map((l) => l.fontFamily);
+  const sec = (frames: number) => Math.round((frames / output.fps) * 100) / 100;
+  const frames = (s: number) => Math.round(s * output.fps);
+
+  const focusChat = useCallback(() => chat.current?.focus(), []);
+  function askLoso(text: string) {
+    dock.setState("open");
+    setTimeout(() => chat.current?.fill(text), 30);
+  }
+
+  // Pictures arriving (paste, drop, "Point at it") and the settings sheet.
+  const openDock = useCallback(() => dock.setState("open"), [dock]);
+  const inbox = useLosoInbox({
+    backend,
+    chat,
+    dockState: dock.state,
+    openDock,
+    ingestFiles: (files) => ingestFiles(files),
+    announce,
+    setError,
+  });
+  const settings = useSettingsSheet();
+  useSettingsMode(backend.kind);
+
+  const lastStep = versions[versions.length - 1];
 
   return (
-    <div className="flex h-full flex-col">
+    <div className="relative flex h-full flex-col">
       <FontLoader families={[...FONT_CHOICES, ...textFamilies]} />
       <NarrowScreenNote />
       <input
         ref={fileInputRef}
         type="file"
         hidden
+        multiple
+        accept="video/*,image/*,audio/*"
         onChange={(e) => {
           if (e.target.files?.length) ingestFiles(e.target.files);
         }}
       />
+      {/* The one polite status region: phases, export steps, "Done". */}
+      <p role="status" aria-live="polite" aria-atomic="true" className="sr-only">
+        {announcement}
+      </p>
+      <a
+        href="#loso-chat"
+        onClick={(e) => {
+          e.preventDefault();
+          if (dock.state !== "open") dock.setState("open");
+          setTimeout(focusChat, 30);
+        }}
+        className="sr-only focus:not-sr-only focus:fixed focus:left-3 focus:top-3 focus:z-[200] focus:bg-lime focus:px-3 focus:py-2 focus:text-[13px] focus:text-black"
+      >
+        Skip to Loso chat
+      </a>
 
-      {/* header strip */}
-      <div className="flex h-12 shrink-0 items-center gap-4 border-b border-line px-5">
+      {/* ---- the editor bar: one 52px line ---- */}
+      <header className="flex h-[52px] shrink-0 items-center gap-3 border-b border-line pl-4 pr-3">
         <Link
           href="/"
-          className="flex items-center gap-1.5 text-[12.5px] text-ink-faint transition-colors hover:text-ink"
+          aria-label="Loso: all your videos"
+          title="All your videos"
+          className="flex h-10 items-center gap-1.5 pr-1 text-ink-dim transition-colors hover:text-lime"
         >
-          <ArrowLeft size={13} /> All projects
+          <ArrowLeft size={14} aria-hidden />
+          <span className="font-serif text-[21px] italic leading-none tracking-tight text-ink">Loso</span>
         </Link>
-        <span className="h-3.5 w-px bg-line" />
+        <span className="h-5 w-px bg-line-strong" aria-hidden />
+        <button
+          type="button"
+          onClick={() => setRailOpen(!railOpen)}
+          aria-pressed={railOpen}
+          aria-controls="pieces-rail"
+          title={railOpen ? "Hide the pieces" : "Show the pieces"}
+          aria-label="Pieces panel"
+          className={cx("flex h-10 w-10 items-center justify-center transition-colors", railOpen ? "text-ink" : "text-ink-dim hover:text-ink")}
+        >
+          <PanelLeft size={16} />
+        </button>
         <EditableTitle
           value={title}
           onSave={async (next) => {
             setTitle(next);
-            await fetchJson(`/api/projects/${project.id}`, jsonInit("PATCH", { title: next })).catch(() =>
-              setError("Couldn't rename the project")
-            );
+            await backend.rename(next).catch(() => setError("Couldn't rename the video."));
           }}
         />
-        <span className="micro text-lime">compositor</span>
+        <span className="hidden min-w-0 items-center gap-1.5 text-[12.5px] text-ink-dim lg:flex">
+          {backend.folder ? (
+            <>
+              <span className="shrink-0">saved in</span>
+              <FolderOpen size={13} aria-hidden className="shrink-0" />
+              <span className="max-w-[160px] truncate text-ink">{backend.folder.name}</span>
+            </>
+          ) : (
+            <span>on this computer</span>
+          )}
+        </span>
         <SaveStatus
           state={saveState}
           onRetry={() => {
@@ -746,779 +907,967 @@ export function CompositorEditor({ project }: { project: ProjectShape }) {
             flush();
           }}
         />
-        <div className="ml-1 flex items-center gap-0.5">
+        <div className="flex-1" />
+
+        <div className="flex items-center">
           <button
             onClick={undo}
-            disabled={!canUndo}
+            disabled={!canUndo || agentBusy}
             title="Undo (⌘Z)"
-            aria-label="Undo"
-            className="flex h-7 w-7 items-center justify-center rounded-md text-ink-dim transition-colors hover:bg-line hover:text-ink disabled:pointer-events-none disabled:opacity-30"
+            className="flex h-10 items-center gap-1.5 px-2.5 text-[13.5px] text-ink transition-colors hover:text-lime disabled:text-ink-faint"
           >
-            <Undo2 size={14} />
+            <Undo2 size={15} aria-hidden /> Undo
           </button>
           <button
             onClick={redo}
-            disabled={!canRedo}
+            disabled={!canRedo || agentBusy}
             title="Redo (⇧⌘Z)"
             aria-label="Redo"
-            className="flex h-7 w-7 items-center justify-center rounded-md text-ink-dim transition-colors hover:bg-line hover:text-ink disabled:pointer-events-none disabled:opacity-30"
+            className="flex h-10 w-9 items-center justify-center text-ink-dim transition-colors hover:text-lime disabled:text-ink-ghost"
           >
-            <Redo2 size={14} />
+            <Redo2 size={15} />
           </button>
         </div>
-        <div className="flex-1" />
-        {agentBusy && (
-          <span className="micro flex items-center gap-2 text-lime">
-            <span className="led on blink" /> Agent working
-          </span>
-        )}
-        {error && (
-          <InlineError onDismiss={() => setError(null)} className="max-w-[360px]">
-            {error}
-          </InlineError>
-        )}
+        <button
+          ref={versionsBtnRef}
+          type="button"
+          aria-expanded={versionsOpen}
+          aria-haspopup="dialog"
+          onClick={() => setVersionsOpen((v) => !v)}
+          title={lastStep ? `Last change: ${lastStep.meta.label} · ${clock(lastStep.meta.at)}` : undefined}
+          className={cx(
+            "flex h-10 items-center gap-1.5 px-2.5 text-[13.5px] transition-colors",
+            versionsOpen ? "text-lime" : "text-ink hover:text-lime"
+          )}
+        >
+          <HistoryIcon size={15} aria-hidden /> Versions
+          <span className="font-mono text-[12px] text-ink-dim">{versions.length}</span>
+        </button>
+        <PointAtItButton
+          active={inbox.marking}
+          onStart={inbox.startMarking}
+          disabledReason={
+            agentBusy
+              ? "Wait until Loso finishes"
+              : previewing
+                ? "Go back to your latest version first"
+                : layers.length === 0
+                  ? "Add something to your video first"
+                  : null
+          }
+        />
+        <button
+          type="button"
+          aria-haspopup="dialog"
+          aria-label="Settings"
+          title="Settings and your AI key (⌘ ,)"
+          onClick={(e) => settings.open({ opener: e.currentTarget })}
+          className="flex h-10 w-10 items-center justify-center text-ink-dim transition-colors hover:text-lime"
+        >
+          <Settings2 size={16} aria-hidden />
+        </button>
+        <span className="mx-1 h-5 w-px bg-line-strong" aria-hidden />
         {renderUrl && !rendering && (
           <a
             href={renderUrl}
             download={`${safeFileName(title)}.mp4`}
-            title={renderStale ? "This export predates your latest edits" : undefined}
+            title={
+              renderStale
+                ? "This copy is from before your latest changes"
+                : savedAs
+                  ? `Already saved in your folder as ${savedAs}. This saves one more copy.`
+                  : undefined
+            }
             className={cx(
-              "flex items-center gap-1.5 text-[12.5px] transition-colors hover:text-lime",
-              renderStale ? "text-ink-faint" : "text-ink-dim"
+              "flex h-10 items-center gap-1.5 px-2 text-[13px] transition-colors hover:text-lime",
+              renderStale ? "text-ink-dim" : "text-ink"
             )}
           >
-            <Download size={13} /> {renderStale ? "Download previous export" : "Download MP4"}
+            <Download size={14} aria-hidden /> {renderStale ? "Download old version" : "Download"}
           </a>
         )}
+        {rendering && <span className="hidden text-[12.5px] text-ink-dim xl:inline">Keep this tab open</span>}
         <Button
-          size="sm"
           onClick={exportVideo}
           disabled={rendering || layers.length === 0}
-          title={layers.length === 0 ? "Add a layer to export" : undefined}
+          title={
+            layers.length === 0
+              ? "Add something to your video first"
+              : renderUrl && renderStale
+                ? "You've changed things since you last made it. This makes a new MP4 with your changes."
+                : undefined
+          }
         >
-          {rendering ? <Loader2 size={13} className="animate-spin" /> : <Download size={13} />}
+          {rendering && <Loader2 size={14} className="animate-spin" aria-hidden />}
           {rendering
-            ? `Rendering… ${renderElapsed}s`
+            ? renderProgress !== null
+              ? `Making… ${Math.round(renderProgress * 100)}%`
+              : `Making… ${renderElapsed}s`
             : renderUrl && renderStale
-              ? "Re-export"
-              : "Export video"}
+              ? "Update the video"
+              : "Make the video"}
         </Button>
-      </div>
+      </header>
 
-      <div className="flex min-h-0 flex-1">
-        {/* left rail */}
-        <div
-          className={cx(
-            "flex w-[300px] shrink-0 flex-col gap-6 overflow-y-auto border-r border-line p-5 transition-opacity",
-            agentBusy && "pointer-events-none opacity-50"
-          )}
-          aria-busy={agentBusy}
-        >
-          {/* output size */}
-          <div className="flex flex-col gap-3">
-            <span className="micro">Output</span>
-            <Select
-              value={activePreset?.id ?? "custom"}
-              onChange={(e) => {
-                const p = OUTPUT_PRESETS.find((x) => x.id === e.target.value);
-                if (p) applyPreset(p.width, p.height);
-              }}
-            >
-              {OUTPUT_PRESETS.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.label} · {p.width}×{p.height}
-                </option>
-              ))}
-              {!activePreset && <option value="custom">Custom · {output.width}×{output.height}</option>}
-            </Select>
-            {layers.length > 0 && (
-              <p className="-mt-1 text-[11px] text-ink-faint">Presets rescale your layers to fit.</p>
-            )}
-            <div className="grid grid-cols-2 gap-3">
-              <NumRow label="Width" value={output.width} min={16} onChange={(v) => setOutput({ width: Math.max(16, v) })} />
-              <NumRow label="Height" value={output.height} min={16} onChange={(v) => setOutput({ height: Math.max(16, v) })} />
-              <NumRow label="FPS" value={output.fps} min={1} onChange={(v) => setOutput({ fps: Math.max(1, v) })} />
-              <NumRow
-                label="Secs"
-                step={0.5}
-                min={0.5}
-                value={Number(durationSec.toFixed(2))}
-                onChange={(v) => setOutput({ durationInFrames: Math.max(1, Math.round(v * output.fps)) })}
-              />
-            </div>
-            <label className="flex items-center gap-2">
-              <span className="micro w-[52px] shrink-0">BG</span>
-              <input
-                type="color"
-                value={output.background ?? "#000000"}
-                onChange={(e) => setOutput({ background: e.target.value })}
-              />
-              <span className="font-mono text-[11px] text-ink-dim">{output.background}</span>
-            </label>
-          </div>
-
-          {/* add tray */}
-          <div className="flex flex-col gap-2 border-t border-line pt-5">
-            <span className="micro">Add</span>
-            <div className="grid grid-cols-2 gap-2">
-              <TrayButton icon={Film} label="Video" onClick={() => pickFile("video")} />
-              <TrayButton icon={ImageIcon} label="Image" onClick={() => pickFile("image")} />
-              <TrayButton icon={Music} label="Audio" onClick={() => pickFile("audio")} />
-              <TrayButton icon={TypeIcon} label="Text" onClick={addText} />
-            </div>
-            {uploading && (
-              <span className="micro flex min-w-0 items-center gap-2 text-lime" aria-live="polite">
-                <Loader2 size={11} className="shrink-0 animate-spin" />
-                <span className="truncate">
-                  Uploading {uploading.n > 1 ? `${uploading.i}/${uploading.n} — ` : ""}
-                  {uploading.name}
-                </span>
-              </span>
-            )}
-          </div>
-
-          <TemplatesSection
-            projectId={project.id}
-            doc={doc}
-            beforeApply={() => flush()}
-            onApplied={(next) => adoptExternal(next, `tpl-${Date.now()}`)}
-          />
-
-          {/* layer list */}
-          <div className="flex flex-col gap-2 border-t border-line pt-5">
-            <span className="micro">Layers</span>
-            {sortedLayers.length === 0 && (
-              <p className="text-[12px] leading-relaxed text-ink-faint">
-                Drop a video, image, or audio onto the stage — or use Add above.
-              </p>
-            )}
-            {sortedLayers.map((l) => {
-              const Icon = TYPE_ICON[l.type];
-              const isSel = selectedId === l.id;
-              const label = layerLabel(l);
-              return (
-                <div
-                  key={l.id}
-                  role="button"
-                  tabIndex={0}
-                  aria-pressed={isSel}
-                  aria-label={`${l.type} layer: ${label}`}
-                  onClick={() => setSelectedId(l.id)}
-                  onDoubleClick={() => setRenamingId(l.id)}
-                  onKeyDown={(e) => {
-                    if (e.target !== e.currentTarget) return;
-                    if (e.key === "Enter" || e.key === " ") {
-                      e.preventDefault();
-                      setSelectedId(l.id);
-                    }
-                  }}
-                  className={cx(
-                    "group flex cursor-pointer items-center gap-2 rounded-md border py-1 pl-2.5 pr-1 text-[12.5px] transition-colors",
-                    isSel
-                      ? "border-lime/60 bg-lime/5 text-ink"
-                      : "border-line text-ink-dim hover:border-line-strong"
-                  )}
-                >
-                  <Icon size={13} className="shrink-0" />
-                  {renamingId === l.id ? (
-                    <input
-                      autoFocus
-                      defaultValue={label}
-                      aria-label="Layer name"
-                      onClick={(e) => e.stopPropagation()}
-                      onBlur={(e) => {
-                        const name = e.target.value.trim();
-                        if (name && name !== label) patchLayer(l.id, { name });
-                        setRenamingId(null);
-                      }}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter") e.currentTarget.blur();
-                        if (e.key === "Escape") setRenamingId(null);
-                      }}
-                      className="uline min-w-0 flex-1 !py-0 text-[12.5px]"
-                    />
-                  ) : (
-                    <span className="min-w-0 flex-1 truncate" title="Double-click to rename">
-                      {label}
-                    </span>
-                  )}
-                  <div
-                    className={cx(
-                      "flex items-center transition-opacity group-hover:opacity-100 group-focus-within:opacity-100",
-                      isSel ? "opacity-100" : "opacity-0"
-                    )}
-                  >
-                    <button
-                      className="flex h-6 w-6 items-center justify-center rounded text-ink-faint hover:text-ink"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        reorder(l.id, 1);
-                      }}
-                      title="Bring forward ( ] )"
-                      aria-label={`Bring ${label} forward`}
-                    >
-                      <ChevronUp size={13} />
-                    </button>
-                    <button
-                      className="flex h-6 w-6 items-center justify-center rounded text-ink-faint hover:text-ink"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        reorder(l.id, -1);
-                      }}
-                      title="Send back ( [ )"
-                      aria-label={`Send ${label} back`}
-                    >
-                      <ChevronDown size={13} />
-                    </button>
-                    <button
-                      className="flex h-6 w-6 items-center justify-center rounded text-ink-faint hover:text-danger"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        removeLayer(l.id);
-                      }}
-                      title="Delete layer (⌫)"
-                      aria-label={`Delete ${label}`}
-                    >
-                      <Trash2 size={12} />
-                    </button>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
+      {error && (
+        <div className="flex shrink-0 items-start gap-3 border-b border-danger/40 bg-black px-5 py-2.5">
+          <InlineError onDismiss={() => setError(null)} className="flex-1">
+            {error}
+          </InlineError>
         </div>
+      )}
 
-        {/* stage + timeline: the stage is pinned to the viewport height (minus a
-            peek of the timeline header) so adding layers never shrinks the
-            canvas — the timeline lives below and the column scrolls to it. */}
-        <div ref={stageColRef} className="flex min-w-0 flex-1 flex-col overflow-y-auto bg-void">
-          <div
-            ref={stageRef}
-            className="relative flex h-[calc(100%-44px)] min-h-[320px] shrink-0 items-center justify-center overflow-hidden p-8"
-            onDragEnter={(e) => {
-              if (!e.dataTransfer.types.includes("Files")) return;
-              dragDepth.current += 1;
-              setDragOver(true);
-            }}
-            onDragLeave={() => {
-              dragDepth.current = Math.max(0, dragDepth.current - 1);
-              if (dragDepth.current === 0) setDragOver(false);
-            }}
-            onDragOver={(e) => e.preventDefault()}
-            onDrop={(e) => {
-              e.preventDefault();
-              dragDepth.current = 0;
-              setDragOver(false);
-              if (e.dataTransfer.files?.length) ingestFiles(e.dataTransfer.files);
-            }}
-            onPointerDown={() => setSelectedId(null)}
+      <div className="relative flex min-h-0 flex-1">
+        {/* ---- pieces rail ---- */}
+        {railOpen && (
+          <aside
+            id="pieces-rail"
+            ref={railRef}
+            aria-label="Pieces of your video"
+            inert={agentBusy || undefined}
+            aria-busy={agentBusy}
+            className={cx(
+              "flex shrink-0 flex-col overflow-y-auto border-r border-line transition-opacity",
+              showWords ? "w-[380px]" : "w-[300px]",
+              agentBusy && "opacity-50"
+            )}
           >
             {agentBusy && (
-              <div className="absolute inset-0 z-40 flex items-start justify-center bg-transparent pt-4">
-                <span className="micro rounded-full border border-lime/40 bg-black/80 px-3 py-1.5 text-lime backdrop-blur-sm">
-                  The agent is editing — watch it build
-                </span>
-              </div>
+              <p className="border-b border-line px-5 py-3 text-[13px] leading-snug text-ink">
+                Paused while Loso edits. Press Stop to take over.
+              </p>
             )}
-            {dragOver && (
-              <div className="pointer-events-none absolute inset-3 z-30 flex items-center justify-center border-2 border-dashed border-lime/70 bg-lime/5">
-                <span className="font-serif text-[22px] italic text-lime">Drop to add</span>
-              </div>
-            )}
-            {dispW > 0 && (
-              <div
-                className="relative shadow-[0_30px_90px_-30px_rgba(0,0,0,0.9)]"
-                style={{ width: dispW, height: dispH }}
-                onPointerDown={(e) => e.stopPropagation()}
-              >
-                <Player
-                  component={CompositorComposition}
-                  durationInFrames={Math.max(1, output.durationInFrames)}
-                  fps={output.fps}
-                  compositionWidth={output.width}
-                  compositionHeight={output.height}
-                  inputProps={{ doc: resolved }}
-                  style={{ width: "100%", height: "100%" }}
-                  // open past the intro animations so a paused canvas shows the design, not a black frame 0
-                  initialFrame={Math.min(Math.max(0, output.durationInFrames - 1), Math.round(output.fps * 1.5))}
-                  controls
-                  loop
+            {showWords ? (
+              <WordsOnScreen
+                doc={doc}
+                activeId={selectedIsCaption ? selectedId : null}
+                onSelect={(id) => setSelectedId(id)}
+                change={changeWords}
+                playerRef={playerRef}
+                onBack={() => {
+                  setWordsOpen(false);
+                  setSelectedId(null);
+                }}
+                onUndo={undo}
+                announce={announce}
+                onAsk={backend.agent ? () => askLoso("Add words on screen (captions) for what is said in the video") : undefined}
+                title={title}
+              />
+            ) : !selected ? (
+              <div className="flex flex-col gap-7 p-5">
+                {/* add */}
+                <section aria-labelledby="add-h" className="flex flex-col gap-2.5">
+                  <RailHeading id="add-h">Add</RailHeading>
+                  <div className="flex flex-col border-t border-line">
+                    <RailAction icon={Plus} label="Add files from your computer" onClick={pickFiles} />
+                    <RailAction icon={TypeIcon} label="Add words" onClick={addText} />
+                    <RailAction icon={WordsIcon} label="Words on screen (subtitles)" onClick={() => setWordsOpen(true)} />
+                  </div>
+                  <p role="status" className="min-h-[18px] text-[12.5px] text-lime">
+                    {uploading
+                      ? `${backend.kind === "local" ? "Adding" : "Uploading"} ${uploading.n > 1 ? `${uploading.i} of ${uploading.n}: ` : ""}${uploading.name}`
+                      : ""}
+                  </p>
+                </section>
+
+                {backend.folder && (
+                  <FolderTray
+                    folder={backend.folder}
+                    version={folderVersion}
+                    used={new Set(mediaRefs(doc))}
+                    onAdd={(entry) =>
+                      addMediaLayer(entry.kind, backend.folder!.refFor(entry), entry.name.replace(/\.[^.]+$/, ""))
+                    }
+                  />
+                )}
+
+                <TemplatesSection
+                  templates={backend.templates}
+                  doc={doc}
+                  beforeApply={() => flush()}
+                  onApplied={(next, name) => adoptExternal(next, `tpl-${Date.now()}`, `Started from ${name}`)}
                 />
 
-                {/* selection overlay */}
-                {selected && selected.type !== "audio" && (
-                  <div
-                    className="absolute z-10 cursor-move border border-lime"
-                    style={{
-                      left: selected.x * fit,
-                      top: selected.y * fit,
-                      width: selected.width * fit,
-                      height: selected.height * fit,
-                      transform: `rotate(${selected.rotation}deg)`,
-                      transformOrigin: "center center",
-                    }}
-                    onPointerDown={beginMove}
-                  >
-                    {(["nw", "ne", "sw", "se"] as const).map((c) => (
-                      // 20px transparent hit area around a 10px visual dot
-                      <span
-                        key={c}
-                        onPointerDown={(e) => beginResize(e, c)}
-                        className="absolute flex h-5 w-5 items-center justify-center"
-                        style={{
-                          left: c.includes("w") ? -10 : undefined,
-                          right: c.includes("e") ? -10 : undefined,
-                          top: c.includes("n") ? -10 : undefined,
-                          bottom: c.includes("s") ? -10 : undefined,
-                          cursor: c === "nw" || c === "se" ? "nwse-resize" : "nesw-resize",
+                {/* pieces list */}
+                <section aria-labelledby="pieces-h" className="flex flex-col gap-2.5" data-pieces>
+                  <RailHeading id="pieces-h">In your video</RailHeading>
+                  {sortedLayers.length === 0 && (
+                    <p className="text-[13px] leading-relaxed text-ink-dim">
+                      Nothing yet. Drop a video, picture or sound anywhere, or tell Loso what you want.
+                    </p>
+                  )}
+                  <ul className="flex flex-col border-t border-line">
+                    {sortedLayers.map((l) => {
+                      // all captions fold into one "Words on screen" entry
+                      if (isCaption(l))
+                        return l.id === sortedLayers.find(isCaption)?.id ? (
+                          <WordsPiecesRow key="words-on-screen" doc={doc} onOpen={() => setWordsOpen(true)} />
+                        ) : null;
+                      const Icon = TYPE_ICON[l.type];
+                      const label = layerLabel(l);
+                      return (
+                        <li key={l.id} className="group flex items-center gap-1 border-b border-line">
+                          {renamingId === l.id ? (
+                            <input
+                              autoFocus
+                              defaultValue={label}
+                              aria-label="Name"
+                              onBlur={(e) => {
+                                const name = e.target.value.trim();
+                                if (name && name !== label) patchLayer(l.id, { name });
+                                setRenamingId(null);
+                              }}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter") e.currentTarget.blur();
+                                if (e.key === "Escape") setRenamingId(null);
+                              }}
+                              className="uline my-1.5 min-w-0 flex-1 !py-1 text-[13.5px]"
+                            />
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => setSelectedId(l.id)}
+                              onDoubleClick={() => setRenamingId(l.id)}
+                              onKeyDown={(e) => {
+                                if (e.key === "F2") {
+                                  e.preventDefault();
+                                  setRenamingId(l.id);
+                                }
+                              }}
+                              className="flex min-h-10 min-w-0 flex-1 items-center gap-2.5 text-left text-[13.5px] text-ink-dim transition-colors hover:text-ink"
+                            >
+                              <Icon size={14} className="shrink-0" aria-hidden />
+                              <span className="w-[54px] shrink-0 text-[12px] text-ink-faint">{KIND_WORD[l.type]}</span>
+                              <span className="min-w-0 flex-1 truncate text-ink">
+                                {label}
+                                {l.type !== "text" && assetUrls[l.assetHash] === null && (
+                                  <span className="ml-1.5 text-danger">missing<span className="sr-only">: file not found in the folder</span></span>
+                                )}
+                              </span>
+                            </button>
+                          )}
+                          <div className="flex items-center opacity-60 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
+                            <IconBtn label={`Move ${label} in front`} title="Move in front ( ] )" onClick={() => reorder(l.id, 1)}>
+                              <ChevronUp size={14} />
+                            </IconBtn>
+                            <IconBtn label={`Move ${label} behind`} title="Move behind ( [ )" onClick={() => reorder(l.id, -1)}>
+                              <ChevronDown size={14} />
+                            </IconBtn>
+                            <IconBtn label={`Remove ${label}`} title="Remove (you can undo)" onClick={() => removeLayer(l.id)} danger>
+                              <Trash2 size={13} />
+                            </IconBtn>
+                          </div>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </section>
+
+                {/* video settings, tucked away */}
+                <details className="group border-t border-line pt-4">
+                  <summary className="flex min-h-10 cursor-pointer list-none items-center justify-between text-[13.5px] text-ink">
+                    Video settings
+                    <span className="text-[12.5px] text-ink-dim">
+                      {SHAPE_WORD[activePreset?.id ?? ""] ?? "Custom"} · {durationSec.toFixed(durationSec % 1 ? 1 : 0)}s
+                    </span>
+                  </summary>
+                  <div className="mt-3 flex flex-col gap-3.5">
+                    <label className="flex flex-col gap-1">
+                      <span className="text-[12.5px] text-ink-dim">Shape</span>
+                      <Select
+                        value={activePreset?.id ?? "custom"}
+                        onChange={(e) => {
+                          const p = OUTPUT_PRESETS.find((x) => x.id === e.target.value);
+                          if (p) applyPreset(p.width, p.height);
                         }}
                       >
-                        <span className="h-2.5 w-2.5 rounded-full border border-black bg-lime" />
-                      </span>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-
-          {/* timeline strip */}
-          <div className="shrink-0 border-t border-line px-6 pb-6">
-            <button
-              type="button"
-              onClick={() =>
-                stageColRef.current?.scrollTo({ top: stageColRef.current.scrollHeight, behavior: "smooth" })
-              }
-              className="sticky top-0 z-10 -mx-6 mb-2 flex h-[43px] w-[calc(100%+3rem)] items-center gap-3 bg-void px-6 text-left"
-              title="Scroll to the timeline"
-            >
-              <span className="micro">Timeline</span>
-              <span className="font-mono text-[11px] text-ink-faint">
-                {durationSec.toFixed(1)}s · {output.fps}fps · {layers.length} layers
-              </span>
-              {layers.length > 0 && <ChevronDown size={13} className="ml-auto text-ink-faint" />}
-            </button>
-            <div className="flex flex-col gap-1">
-              {sortedLayers.map((l) => {
-                const total = Math.max(1, output.durationInFrames);
-                const left = (l.from / total) * 100;
-                const w = (Math.min(l.durationInFrames, total - l.from) / total) * 100;
-                const Icon = TYPE_ICON[l.type];
-                const label = layerLabel(l);
-                return (
-                  <button
-                    type="button"
-                    key={l.id}
-                    aria-label={`Select ${label}`}
-                    className="relative block h-5 w-full cursor-pointer rounded bg-line/50"
-                    onClick={() => setSelectedId(l.id)}
-                  >
-                    <span
-                      className={cx(
-                        "absolute top-0 flex h-full min-w-0 items-center gap-1 overflow-hidden rounded px-1.5 text-[10px]",
-                        selectedId === l.id ? "bg-lime text-black" : "bg-line-strong text-ink-dim"
+                        {OUTPUT_PRESETS.map((p) => (
+                          <option key={p.id} value={p.id}>
+                            {SHAPE_WORD[p.id] ?? p.label}
+                          </option>
+                        ))}
+                        {!activePreset && <option value="custom">Custom</option>}
+                      </Select>
+                      {layers.length > 0 && (
+                        <span className="text-[12px] text-ink-dim">Changing the shape resizes everything to fit.</span>
                       )}
-                      style={{ left: `${left}%`, width: `${Math.max(2, w)}%` }}
-                    >
-                      <Icon size={9} className="shrink-0" />
-                      <span className="truncate">{label}</span>
-                    </span>
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-        </div>
-
-        {/* right rail: layer inspector | studio agent */}
-        <div
-          className={cx(
-            "flex shrink-0 flex-col border-l border-line transition-[width] duration-200",
-            rightTab === "agent" ? "w-[380px]" : "w-[280px]"
-          )}
-        >
-          <div className="flex shrink-0 border-b border-line" role="tablist">
-            {(
-              [
-                ["layer", "Layer", SlidersHorizontal],
-                ["agent", "Agent", Sparkles],
-              ] as const
-            ).map(([id, label, Icon]) => (
-              <button
-                key={id}
-                type="button"
-                role="tab"
-                aria-selected={rightTab === id}
-                onClick={() => setRightTab(id)}
-                className={cx(
-                  "relative flex flex-1 items-center justify-center gap-1.5 py-2.5 text-[12.5px] transition-colors",
-                  rightTab === id ? "text-ink" : "text-ink-faint hover:text-ink-dim"
-                )}
-              >
-                <Icon size={12} className={id === "agent" && agentBusy ? "animate-pulse text-lime" : undefined} />
-                {label}
-                {rightTab === id && <span className="absolute inset-x-4 -bottom-px h-px bg-lime" />}
-              </button>
-            ))}
-          </div>
-          {/* the chat stays mounted so a running turn survives tab switches */}
-          <div className={cx("min-h-0 flex-1", rightTab === "agent" ? "flex flex-col" : "hidden")}>
-            <ChatPanel
-              projectId={project.id}
-              onDoc={onAgentDoc}
-              onBusyChange={onAgentBusy}
-              beforeSend={agentBeforeSend}
-              canUndoTurn={canUndoTurn}
-              onUndoTurn={undo}
-            />
-          </div>
-        <div
-          className={cx(
-            "min-h-0 flex-1 overflow-y-auto p-5",
-            rightTab !== "layer" && "hidden",
-            agentBusy && "pointer-events-none opacity-50"
-          )}
-        >
-          {!selected ? (
-            <div className="flex flex-col gap-4">
-              <p className="text-[12.5px] leading-relaxed text-ink-faint">
-                Select a layer to edit its position, timing, and style.
-              </p>
-              <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1.5 border-t border-line pt-4 text-[11.5px]">
-                <span className="micro col-span-2 mb-1">Shortcuts</span>
-                {[
-                  ["← ↑ → ↓", "Nudge 1px (⇧ 10px)"],
-                  ["⌫", "Delete layer"],
-                  ["⌘D", "Duplicate"],
-                  ["[  ]", "Send back / forward"],
-                  ["⌘Z  ⇧⌘Z", "Undo / redo"],
-                  ["Esc", "Deselect"],
-                ].map(([k, v]) => (
-                  <div key={k} className="contents">
-                    <dt className="font-mono text-ink-dim">{k}</dt>
-                    <dd className="text-ink-faint">{v}</dd>
-                  </div>
-                ))}
-              </dl>
-            </div>
-          ) : (
-            <div className="flex flex-col gap-5">
-              <span className="micro truncate text-lime">
-                {selected.type} layer{selected.name ? ` · ${selected.name}` : ""}
-              </span>
-              <label className="flex items-center gap-2" title="Name this layer as a template slot — the part that changes per video">
-                <span className="micro w-[52px] shrink-0">Slot</span>
-                <input
-                  value={selected.slot ?? ""}
-                  placeholder="fixed design"
-                  onChange={(e) =>
-                    patchLayer(selected.id, { slot: e.target.value.replace(/\s+/g, "_").toLowerCase() || undefined })
-                  }
-                  className="uline !py-1 font-mono text-[12px]"
-                />
-              </label>
-
-              {selected.type === "text" && (
-                <div className="flex flex-col gap-3">
-                  <Field label="Copy">
-                    <textarea
-                      rows={3}
-                      value={selected.text}
-                      onChange={(e) => patchLayer(selected.id, { text: e.target.value })}
-                      className="w-full resize-none rounded-lg border border-line bg-panel/60 px-3 py-2 text-sm text-ink outline-none focus:border-lime/60"
-                    />
-                  </Field>
-                  <Field label="Font">
-                    <Select
-                      value={selected.fontFamily}
-                      onChange={(e) => patchLayer(selected.id, { fontFamily: e.target.value })}
-                    >
-                      {FONT_CHOICES.map((f) => (
-                        <option key={f} value={f}>
-                          {f}
-                        </option>
-                      ))}
-                    </Select>
-                  </Field>
-                  <div className="grid grid-cols-2 gap-3">
+                    </label>
                     <NumRow
-                      label="Size"
-                      value={selected.fontSize}
-                      min={4}
-                      onChange={(v) => patchLayer(selected.id, { fontSize: Math.max(4, v) })}
+                      wide
+                      label="Length (s)"
+                      step={0.5}
+                      min={0.5}
+                      value={Number(durationSec.toFixed(2))}
+                      onChange={(v) => setOutput({ durationInFrames: Math.max(1, Math.round(v * output.fps)) })}
                     />
-                    <NumRow
-                      label="Weight"
-                      step={100}
-                      value={selected.fontWeight}
-                      onChange={(v) => patchLayer(selected.id, { fontWeight: v })}
-                    />
-                  </div>
-                  <div className="flex items-center justify-between">
                     <label className="flex items-center gap-2">
-                      <span className="micro">Color</span>
+                      <span className="w-[92px] shrink-0 text-[12.5px] text-ink-dim">Background</span>
                       <input
                         type="color"
-                        value={selected.color}
-                        onChange={(e) => patchLayer(selected.id, { color: e.target.value })}
+                        aria-label="Background colour"
+                        value={output.background ?? "#000000"}
+                        onChange={(e) => setOutput({ background: e.target.value })}
                       />
                     </label>
-                    <button
-                      onClick={() => patchLayer(selected.id, { italic: !selected.italic })}
-                      title="Italic"
-                      aria-label="Italic"
-                      aria-pressed={selected.italic}
-                      className={cx(
-                        "flex h-7 w-7 items-center justify-center rounded-md border italic transition-colors",
-                        selected.italic
-                          ? "border-lime bg-lime/10 text-lime"
-                          : "border-line text-ink-dim hover:border-line-strong"
-                      )}
+                    <details>
+                      <summary className="flex min-h-8 cursor-pointer list-none items-center text-[12.5px] text-ink-dim hover:text-ink">
+                        Advanced ▸
+                      </summary>
+                      <div className="mt-2 grid grid-cols-1 gap-2.5">
+                        <NumRow wide label="Width (px)" value={output.width} min={16} onChange={(v) => setOutput({ width: Math.max(16, v) })} />
+                        <NumRow wide label="Height (px)" value={output.height} min={16} onChange={(v) => setOutput({ height: Math.max(16, v) })} />
+                        <NumRow wide label="Frames / sec" value={output.fps} min={1} onChange={(v) => setOutput({ fps: Math.max(1, v) })} />
+                      </div>
+                    </details>
+                  </div>
+                </details>
+              </div>
+            ) : (
+              <Inspector
+                selected={selected}
+                patchLayer={patchLayer}
+                removeLayer={removeLayer}
+                align={align}
+                sec={sec}
+                frames={frames}
+                onBack={() => setSelectedId(null)}
+                onAsk={() => askLoso(`Change the ${KIND_WORD[selected.type].toLowerCase()} “${layerLabel(selected)}” so `)}
+                hasAgent={backend.agent}
+              />
+            )}
+          </aside>
+        )}
+
+        {/* ---- the stage ---- */}
+        <section
+          ref={stageSectionRef}
+          aria-label="Preview of your video"
+          className="relative flex min-w-0 flex-1 flex-col bg-void"
+        >
+          <div className="relative min-h-0 flex-1" onPointerDown={() => setSelectedId(null)}>
+            {/* the safe area: everything left of the floating dock */}
+            <div
+              ref={stageRef}
+              className="absolute bottom-7 left-8 top-7 flex items-center justify-center"
+              style={{ right: safeRight + 32 }}
+            >
+              {dispW > 0 && (layers.length > 0 || previewing) && (
+                <div
+                  className="relative shrink-0 shadow-[0_30px_90px_-30px_rgba(0,0,0,0.9)]"
+                  style={{ width: dispW, height: dispH }}
+                  onPointerDown={(e) => e.stopPropagation()}
+                >
+                  <Player
+                    ref={playerRef}
+                    component={CompositorComposition}
+                    durationInFrames={Math.max(1, shownDoc.output.durationInFrames)}
+                    fps={shownDoc.output.fps}
+                    compositionWidth={shownDoc.output.width}
+                    compositionHeight={shownDoc.output.height}
+                    inputProps={{ doc: resolved }}
+                    style={{ width: "100%", height: "100%" }}
+                    // open past the intro animations so a paused canvas shows the design, not a black frame 0
+                    initialFrame={Math.min(Math.max(0, output.durationInFrames - 1), Math.round(output.fps * 1.5))}
+                    controls
+                    loop
+                  />
+
+                  {previewing && (
+                    <div className="pointer-events-none absolute inset-0 z-20 border-2 border-dashed border-lime/70" aria-hidden />
+                  )}
+
+                  {/* where Loso is working right now */}
+                  {!previewing &&
+                    agentFocus.map((id) => {
+                      const l = layers.find((x) => x.id === id);
+                      if (!l || l.type === "audio") return null;
+                      return (
+                        <div
+                          key={id}
+                          aria-hidden
+                          className="pointer-events-none absolute z-10 border border-lime motion-safe:transition-opacity"
+                          style={{ left: l.x * fit, top: l.y * fit, width: l.width * fit, height: l.height * fit }}
+                        >
+                          <span className="absolute -top-[22px] left-0 whitespace-nowrap bg-lime px-1.5 py-0.5 text-[11.5px] font-medium text-black">
+                            Loso: {layerLabel(l).slice(0, 24)}
+                          </span>
+                        </div>
+                      );
+                    })}
+
+                  {/* "Point at it": draw on the frame to show Loso what to fix */}
+                  {inbox.marking && (
+                    <PointAtIt
+                      doc={shownDoc}
+                      resolved={resolved}
+                      playerRef={playerRef}
+                      fit={fit}
+                      selected={selected}
+                      barHost={stageSectionRef.current}
+                      barRight={safeRight}
+                      agent={backend.agent}
+                      onCancel={inbox.stopMarking}
+                      onSend={inbox.onMarked}
+                      onSave={backend.saveNote ? (f) => backend.saveNote!(f.name, f) : undefined}
+                      announce={announce}
+                    />
+                  )}
+
+                  {/* selection overlay */}
+                  {selected && selected.type !== "audio" && !previewing && (
+                    <div
+                      role="group"
+                      aria-label={`Selected: ${layerLabel(selected)}`}
+                      className="absolute z-10 cursor-move border border-lime"
+                      style={{
+                        left: selected.x * fit,
+                        top: selected.y * fit,
+                        width: selected.width * fit,
+                        height: selected.height * fit,
+                        transform: `rotate(${selected.rotation}deg)`,
+                        transformOrigin: "center center",
+                      }}
+                      onPointerDown={beginMove}
                     >
-                      I
-                    </button>
-                    <Select
-                      className="!w-auto"
-                      value={selected.align}
-                      onChange={(e) =>
-                        patchLayer(selected.id, { align: e.target.value as "left" | "center" | "right" })
-                      }
-                    >
-                      <option value="left">Left</option>
-                      <option value="center">Center</option>
-                      <option value="right">Right</option>
-                    </Select>
-                  </div>
-                </div>
-              )}
-
-              {(selected.type === "video" || selected.type === "image") && (
-                <Field label="Fit">
-                  <Select
-                    value={selected.objectFit}
-                    onChange={(e) =>
-                      patchLayer(selected.id, { objectFit: e.target.value as "cover" | "contain" })
-                    }
-                  >
-                    <option value="cover">Cover</option>
-                    <option value="contain">Contain</option>
-                  </Select>
-                </Field>
-              )}
-
-              {(selected.type === "video" || selected.type === "audio") && (
-                <div className="flex flex-col gap-2.5">
-                  <SliderRow
-                    label="Volume"
-                    min={0}
-                    max={1}
-                    step={0.05}
-                    value={selected.volume}
-                    onChange={(v) => patchLayer(selected.id, { volume: v })}
-                  />
-                  <NumRow
-                    label="Trim in"
-                    value={selected.trimStart}
-                    min={0}
-                    onChange={(v) => patchLayer(selected.id, { trimStart: Math.max(0, v) })}
-                  />
-                </div>
-              )}
-
-              {/* geometry (skip for audio) */}
-              {selected.type !== "audio" && (
-                <div className="flex flex-col gap-2 border-t border-line pt-4">
-                  <span className="micro">Align to canvas</span>
-                  <div className="flex items-center gap-1">
-                    <AlignBtn icon={AlignStartVertical} title="Left" onClick={() => align("left")} />
-                    <AlignBtn icon={AlignCenterVertical} title="Center" onClick={() => align("hcenter")} />
-                    <AlignBtn icon={AlignEndVertical} title="Right" onClick={() => align("right")} />
-                    <span className="mx-1 h-4 w-px bg-line" />
-                    <AlignBtn icon={AlignStartHorizontal} title="Top" onClick={() => align("top")} />
-                    <AlignBtn icon={AlignCenterHorizontal} title="Middle" onClick={() => align("vcenter")} />
-                    <AlignBtn icon={AlignEndHorizontal} title="Bottom" onClick={() => align("bottom")} />
-                  </div>
-                  <span className="micro mt-2">Transform</span>
-                  <div className="grid grid-cols-2 gap-3">
-                    <NumRow label="X" value={selected.x} onChange={(v) => patchLayer(selected.id, { x: v })} />
-                    <NumRow label="Y" value={selected.y} onChange={(v) => patchLayer(selected.id, { y: v })} />
-                    <NumRow
-                      label="W"
-                      value={selected.width}
-                      min={1}
-                      onChange={(v) => patchLayer(selected.id, { width: Math.max(1, v) })}
-                    />
-                    <NumRow
-                      label="H"
-                      value={selected.height}
-                      min={1}
-                      onChange={(v) => patchLayer(selected.id, { height: Math.max(1, v) })}
-                    />
-                    <NumRow
-                      label="Rotate"
-                      value={selected.rotation}
-                      onChange={(v) => patchLayer(selected.id, { rotation: v })}
-                    />
-                  </div>
-                  <SliderRow
-                    label="Opacity"
-                    min={0}
-                    max={1}
-                    step={0.05}
-                    value={selected.opacity}
-                    onChange={(v) => patchLayer(selected.id, { opacity: v })}
-                  />
-                </div>
-              )}
-
-              {/* style: rounded corners + border (skip audio) */}
-              {selected.type !== "audio" && (
-                <div className="flex flex-col gap-2 border-t border-line pt-4">
-                  <span className="micro">Style</span>
-                  <div className="grid grid-cols-2 gap-3">
-                    <NumRow
-                      label="Radius"
-                      value={selected.radius ?? 0}
-                      min={0}
-                      onChange={(v) => patchLayer(selected.id, { radius: Math.max(0, v) })}
-                    />
-                    <NumRow
-                      label="Border"
-                      value={selected.borderWidth ?? 0}
-                      min={0}
-                      onChange={(v) => patchLayer(selected.id, { borderWidth: Math.max(0, v) })}
-                    />
-                  </div>
-                  <label className="flex items-center gap-2">
-                    <span className="micro w-[52px] shrink-0">Line</span>
-                    <input
-                      type="color"
-                      value={selected.borderColor ?? "#ffffff"}
-                      onChange={(e) => patchLayer(selected.id, { borderColor: e.target.value })}
-                    />
-                    <span className="font-mono text-[11px] text-ink-dim">{selected.borderColor}</span>
-                  </label>
-                </div>
-              )}
-
-              {/* entrance animation (skip audio) */}
-              {selected.type !== "audio" && (
-                <div className="flex flex-col gap-3 border-t border-line pt-4">
-                  <span className="micro">Animate in</span>
-                  <Select
-                    value={selected.anim?.preset ?? "none"}
-                    onChange={(e) => {
-                      const preset = e.target.value as Anim["preset"];
-                      const cur = selected.anim ?? { preset: "none", delay: 0, duration: 18 };
-                      patchLayer(selected.id, { anim: { ...cur, preset } });
-                    }}
-                  >
-                    <option value="none">None</option>
-                    <option value="fade">Fade</option>
-                    <option value="rise">Rise up</option>
-                    <option value="scale">Scale / pop</option>
-                    <option value="hero">Hero (center → place)</option>
-                  </Select>
-                  {selected.anim && selected.anim.preset !== "none" && (
-                    <div className="grid grid-cols-2 gap-3">
-                      <NumRow
-                        label="Delay"
-                        value={selected.anim.delay}
-                        min={0}
-                        onChange={(v) =>
-                          patchLayer(selected.id, {
-                            anim: { ...(selected.anim as Anim), delay: Math.max(0, v) },
-                          })
-                        }
-                      />
-                      <NumRow
-                        label="Dur"
-                        value={selected.anim.duration}
-                        min={1}
-                        onChange={(v) =>
-                          patchLayer(selected.id, {
-                            anim: { ...(selected.anim as Anim), duration: Math.max(1, v) },
-                          })
-                        }
-                      />
+                      {(["nw", "ne", "sw", "se"] as const).map((c) => (
+                        // 20px transparent hit area around a 10px visual dot
+                        <span
+                          key={c}
+                          onPointerDown={(e) => beginResize(e, c)}
+                          className="absolute flex h-5 w-5 items-center justify-center"
+                          style={{
+                            left: c.includes("w") ? -10 : undefined,
+                            right: c.includes("e") ? -10 : undefined,
+                            top: c.includes("n") ? -10 : undefined,
+                            bottom: c.includes("s") ? -10 : undefined,
+                            cursor: c === "nw" || c === "se" ? "nwse-resize" : "nesw-resize",
+                          }}
+                        >
+                          <span className="h-2.5 w-2.5 rounded-full border border-black bg-lime" />
+                        </span>
+                      ))}
                     </div>
                   )}
                 </div>
               )}
 
-              {/* timing */}
-              <div className="flex flex-col gap-3 border-t border-line pt-4">
-                <span className="micro">Timing (frames)</span>
-                <div className="grid grid-cols-2 gap-3">
-                  <NumRow
-                    label="Start"
-                    value={selected.from}
-                    min={0}
-                    onChange={(v) => patchLayer(selected.id, { from: Math.max(0, v) })}
-                  />
-                  <NumRow
-                    label="Length"
-                    value={selected.durationInFrames}
-                    min={1}
-                    onChange={(v) => patchLayer(selected.id, { durationInFrames: Math.max(1, v) })}
-                  />
+              {/* empty video: the stage becomes the invitation */}
+              {layers.length === 0 && !previewing && (
+                <div className="absolute inset-0 z-20 flex items-center justify-center p-6" onPointerDown={(e) => e.stopPropagation()}>
+                  <div className="flex max-w-[440px] flex-col gap-5">
+                    <p className="font-serif text-[clamp(30px,3.4vw,44px)] font-light italic leading-[1.05] tracking-tight text-ink">
+                      What are we making?
+                    </p>
+                    <ul className="flex flex-col border-t border-line">
+                      {STARTERS.map((s) => (
+                        <li key={s} className="border-b border-line">
+                          <button
+                            type="button"
+                            onClick={() => askLoso(s)}
+                            className="group flex min-h-11 w-full items-center gap-3 py-2 text-left font-serif text-[17px] italic text-ink-dim transition-colors hover:text-ink"
+                          >
+                            <span className="flex-1">“{s}”</span>
+                            <span className="text-[12px] not-italic text-ink-faint transition-colors group-hover:text-lime">Ask Loso →</span>
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                    <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-[13.5px] text-ink-dim">
+                      <Button size="sm" variant="outline" onClick={pickFiles}>
+                        <Plus size={14} aria-hidden /> Add files
+                      </Button>
+                      <span>or drop videos, pictures and sounds anywhere.</span>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* ribbons: Loso working / looking at an older version */}
+            {(agentBusy || previewing) && (
+              <div
+                className="pointer-events-none absolute left-0 top-3 z-30 flex justify-center"
+                style={{ right: safeRight }}
+              >
+                {previewing && preview ? (
+                  <div className="pointer-events-auto flex items-center gap-3 border border-lime/60 bg-black/95 py-1.5 pl-4 pr-1.5 text-[13px] text-ink">
+                    Looking at an earlier version · {clock(preview.meta.at)}
+                    <Button
+                      size="sm"
+                      onClick={() => {
+                        if (previewIndex !== null) dispatch({ type: "restore", index: previewIndex });
+                        setVersionsOpen(false);
+                        announce(`Went back to the version from ${clock(preview.meta.at)}`);
+                      }}
+                    >
+                      Go back to this
+                    </Button>
+                  </div>
+                ) : (
+                  <div className="pointer-events-auto flex items-center gap-3 border border-lime/50 bg-black/95 py-1 pl-4 pr-1 text-[13px] text-ink">
+                    <span className="orb working" aria-hidden />
+                    <span className="max-w-[340px] truncate">Loso is working · {dockStatus.phase ?? "thinking"}</span>
+                    {backend.agent && (
+                      <button
+                        type="button"
+                        onClick={() => chat.current?.stop()}
+                        className="flex h-9 items-center gap-1.5 px-3 text-ink transition-colors hover:text-danger"
+                      >
+                        <Square size={10} fill="currentColor" aria-hidden /> Stop
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* ---- story strip (bottom drawer) ---- */}
+          <section
+            aria-labelledby="story-h"
+            className="flex shrink-0 flex-col border-t border-line"
+            style={{ paddingRight: safeRight, maxHeight: storyOpen ? "40%" : undefined }}
+          >
+            <button
+              type="button"
+              aria-expanded={storyOpen}
+              aria-controls="story-rows"
+              onClick={() => setStoryOpen(!storyOpen)}
+              className="flex h-10 shrink-0 items-center gap-3 px-6 text-left"
+            >
+              <span id="story-h" className="font-mono text-[11px] uppercase tracking-[0.12em] text-ink-dim">
+                Story
+              </span>
+              <span className="text-[12.5px] text-ink-dim">
+                {durationSec.toFixed(durationSec % 1 ? 1 : 0)} seconds · {layers.length} {layers.length === 1 ? "piece" : "pieces"}
+              </span>
+              <ChevronUp size={14} className={cx("ml-auto text-ink-dim transition-transform", !storyOpen && "rotate-180")} aria-hidden />
+            </button>
+            {storyOpen && (
+              <div id="story-rows" className="min-h-0 overflow-y-auto px-6 pb-4">
+                <div className="flex flex-col gap-1">
+                  {sortedLayers.map((l) => {
+                    // all captions fold into one row that shows their words
+                    if (isCaption(l))
+                      return l.id === sortedLayers.find(isCaption)?.id ? (
+                        <WordsStoryRow key="words-on-screen" doc={doc} activeId={selectedId} onOpen={(id) => setSelectedId(id)} />
+                      ) : null;
+                    const total = Math.max(1, output.durationInFrames);
+                    const left = (l.from / total) * 100;
+                    const w = (Math.min(l.durationInFrames, total - l.from) / total) * 100;
+                    const Icon = TYPE_ICON[l.type];
+                    const label = layerLabel(l);
+                    const on = selectedId === l.id;
+                    return (
+                      <button
+                        type="button"
+                        key={l.id}
+                        aria-pressed={on}
+                        aria-label={`${label}, from ${sec(l.from)} to ${sec(l.from + l.durationInFrames)} seconds`}
+                        className="relative block h-6 w-full cursor-pointer bg-panel"
+                        onClick={() => setSelectedId(l.id)}
+                      >
+                        <span
+                          className={cx(
+                            "absolute top-0 flex h-full min-w-0 items-center gap-1 overflow-hidden px-1.5 text-[11.5px]",
+                            on ? "bg-lime text-black" : agentFocus.includes(l.id) ? "bg-lime/40 text-ink" : "bg-line-strong text-ink"
+                          )}
+                          style={{ left: `${left}%`, width: `${Math.max(2, w)}%` }}
+                        >
+                          <Icon size={10} className="shrink-0" aria-hidden />
+                          <span className="truncate">{label}</span>
+                        </span>
+                      </button>
+                    );
+                  })}
                 </div>
               </div>
+            )}
+          </section>
+        </section>
 
-              <Button
-                variant="danger"
-                size="sm"
-                className="self-start"
-                onClick={() => removeLayer(selected.id)}
-              >
-                <Trash2 size={13} /> Delete layer
-              </Button>
-            </div>
-          )}
-        </div>
-        </div>
+        {/* ---- Loso, floating ---- */}
+        <ChatDock
+          state={dock.state}
+          setState={dock.setState}
+          width={dock.width}
+          setWidth={dock.setWidth}
+          status={dockStatus}
+          focusInside={focusChat}
+        >
+          {(controls) =>
+            backend.agent ? (
+              <ChatPanel
+                projectId={backend.projectId}
+                onDoc={onAgentDoc}
+                onBusyChange={onAgentBusy}
+                beforeSend={agentBeforeSend}
+                canUndoTurn={canUndoTurn}
+                onUndoTurn={undo}
+                dockControls={controls}
+                controlRef={chat}
+                onStatus={setDockStatus}
+                announce={announce}
+                dockOpen={dock.state === "open"}
+                onPutInVideo={inbox.putInVideo}
+              />
+            ) : (
+              <LocalChat projectId={backend.projectId} dockControls={controls} controlRef={chat} />
+            )
+          }
+        </ChatDock>
+
+        {versionsOpen && (
+          <VersionsPanel
+            hist={hist}
+            onPreview={onPreview}
+            onRestore={(i) => {
+              const at = versions[i]?.meta.at;
+              dispatch({ type: "restore", index: i });
+              setVersionsOpen(false);
+              versionsBtnRef.current?.focus();
+              if (at) announce(`Went back to the version from ${clock(at)}`);
+            }}
+            onUndo={undo}
+            onRedo={redo}
+            onClose={() => {
+              setVersionsOpen(false);
+              versionsBtnRef.current?.focus();
+            }}
+          />
+        )}
       </div>
+
+      {dragTypes && <DropOverlay types={dragTypes} {...inbox.dropProps(dragTypes)} />}
+      {inbox.choiceNode(safeRight)}
     </div>
   );
 }
 
-function TrayButton({
-  icon: Icon,
-  label,
-  onClick,
-}: {
-  icon: typeof Film;
-  label: string;
-  onClick: () => void;
-}) {
+// ---------- rail bits ----------
+
+function RailAction({ icon: Icon, label, onClick }: { icon: typeof Film; label: string; onClick: () => void }) {
   return (
     <button
+      type="button"
       onClick={onClick}
-      className="flex items-center gap-2 rounded-md border border-line px-3 py-2 text-[12.5px] text-ink-dim transition-colors hover:border-lime hover:text-lime"
+      className="group flex min-h-11 items-center gap-3 border-b border-line text-left text-[13.5px] text-ink transition-colors hover:text-lime"
     >
-      <Icon size={13} />
+      <Icon size={15} className="shrink-0 text-ink-dim transition-colors group-hover:text-lime" aria-hidden />
       {label}
     </button>
   );
 }
 
-function AlignBtn({
-  icon: Icon,
+function IconBtn({
+  label,
   title,
   onClick,
+  danger,
+  children,
 }: {
-  icon: typeof Film;
+  label: string;
   title: string;
   onClick: () => void;
+  danger?: boolean;
+  children: React.ReactNode;
 }) {
   return (
     <button
+      type="button"
       onClick={onClick}
-      title={`Align ${title.toLowerCase()}`}
-      aria-label={`Align ${title.toLowerCase()}`}
-      className="flex h-7 w-7 items-center justify-center rounded-md border border-line text-ink-dim transition-colors hover:border-lime hover:text-lime"
+      title={title}
+      aria-label={label}
+      className={cx(
+        "flex h-8 w-8 items-center justify-center text-ink-dim transition-colors",
+        danger ? "hover:text-danger" : "hover:text-ink"
+      )}
     >
-      <Icon size={14} />
+      {children}
     </button>
+  );
+}
+
+function AlignBtn({ icon: Icon, title, onClick }: { icon: typeof Film; title: string; onClick: () => void }) {
+  return (
+    <button
+      onClick={onClick}
+      title={`Line up ${title.toLowerCase()}`}
+      aria-label={`Line up ${title.toLowerCase()}`}
+      className="flex h-9 w-9 items-center justify-center text-ink-dim transition-colors hover:text-lime"
+    >
+      <Icon size={15} />
+    </button>
+  );
+}
+
+function Group({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <div className="flex flex-col gap-3 border-t border-line pt-4">
+      <h3 className="font-mono text-[11px] uppercase tracking-[0.12em] text-ink-dim">{title}</h3>
+      {children}
+    </div>
+  );
+}
+
+// ---------- the inspector for one piece ----------
+
+function Inspector({
+  selected,
+  patchLayer,
+  removeLayer,
+  align,
+  sec,
+  frames,
+  onBack,
+  onAsk,
+  hasAgent,
+}: {
+  selected: Layer;
+  patchLayer: (id: string, patch: Partial<Layer>) => void;
+  removeLayer: (id: string) => void;
+  align: (edge: "left" | "hcenter" | "right" | "top" | "vcenter" | "bottom") => void;
+  sec: (frames: number) => number;
+  frames: (s: number) => number;
+  onBack: () => void;
+  onAsk: () => void;
+  hasAgent: boolean;
+}) {
+  const label = layerLabel(selected);
+  return (
+    <div className="flex flex-col gap-5 p-5">
+      <button
+        type="button"
+        onClick={onBack}
+        className="flex min-h-10 items-center gap-1.5 self-start text-[13px] text-ink-dim transition-colors hover:text-ink"
+      >
+        <ArrowLeft size={14} aria-hidden /> All pieces
+      </button>
+      <div>
+        <p className="font-mono text-[11px] uppercase tracking-[0.12em] text-lime">{KIND_WORD[selected.type]}</p>
+        <h2 className="mt-1 truncate font-serif text-[22px] italic leading-tight text-ink">{label}</h2>
+      </div>
+      {hasAgent && (
+        <button
+          type="button"
+          onClick={onAsk}
+          className="flex min-h-10 items-center self-start border-b border-lime/60 text-[13.5px] text-ink transition-colors hover:text-lime"
+        >
+          Ask Loso about this →
+        </button>
+      )}
+
+      {selected.type === "text" && (
+        <div className="flex flex-col gap-3">
+          <label className="flex flex-col gap-1">
+            <span className="text-[12.5px] text-ink-dim">Words</span>
+            <textarea
+              rows={3}
+              value={selected.text}
+              onChange={(e) => patchLayer(selected.id, { text: e.target.value })}
+              className="w-full resize-none border border-edge/70 bg-black px-3 py-2 text-[14px] text-ink outline-none focus:border-lime/70"
+            />
+          </label>
+          <label className="flex flex-col gap-1">
+            <span className="text-[12.5px] text-ink-dim">Font</span>
+            <Select value={selected.fontFamily} onChange={(e) => patchLayer(selected.id, { fontFamily: e.target.value })}>
+              {FONT_CHOICES.map((f) => (
+                <option key={f} value={f}>
+                  {f}
+                </option>
+              ))}
+            </Select>
+          </label>
+          <div className="grid grid-cols-2 gap-3">
+            <NumRow label="Size" value={selected.fontSize} min={4} onChange={(v) => patchLayer(selected.id, { fontSize: Math.max(4, v) })} />
+            <NumRow label="Weight" step={100} value={selected.fontWeight} onChange={(v) => patchLayer(selected.id, { fontWeight: v })} />
+          </div>
+          <div className="flex items-center justify-between gap-3">
+            <label className="flex items-center gap-2">
+              <span className="text-[12.5px] text-ink-dim">Colour</span>
+              <input
+                type="color"
+                aria-label="Text colour"
+                value={selected.color}
+                onChange={(e) => patchLayer(selected.id, { color: e.target.value })}
+              />
+            </label>
+            <button
+              onClick={() => patchLayer(selected.id, { italic: !selected.italic })}
+              aria-pressed={selected.italic}
+              className={cx(
+                "flex h-9 items-center px-3 font-serif text-[15px] italic transition-colors",
+                selected.italic ? "border-b border-lime text-lime" : "text-ink-dim hover:text-ink"
+              )}
+            >
+              Slanted
+            </button>
+            <Select
+              className="!w-auto"
+              aria-label="Line up the words"
+              value={selected.align}
+              onChange={(e) => patchLayer(selected.id, { align: e.target.value as "left" | "center" | "right" })}
+            >
+              <option value="left">Left</option>
+              <option value="center">Middle</option>
+              <option value="right">Right</option>
+            </Select>
+          </div>
+        </div>
+      )}
+
+      {(selected.type === "video" || selected.type === "image") && (
+        <label className="flex flex-col gap-1">
+          <span className="text-[12.5px] text-ink-dim">How it fits</span>
+          <Select
+            value={selected.objectFit}
+            onChange={(e) => patchLayer(selected.id, { objectFit: e.target.value as "cover" | "contain" })}
+          >
+            <option value="cover">Fill the box</option>
+            <option value="contain">Show all of it</option>
+          </Select>
+        </label>
+      )}
+
+      {(selected.type === "video" || selected.type === "audio") && (
+        <div className="flex flex-col gap-2.5">
+          <SliderRow
+            label="Loudness"
+            min={0}
+            max={1}
+            step={0.05}
+            value={selected.volume}
+            onChange={(v) => patchLayer(selected.id, { volume: v })}
+          />
+          <NumRow
+            wide
+            label="Start clip at (s)"
+            step={0.1}
+            value={sec(selected.trimStart)}
+            min={0}
+            onChange={(v) => patchLayer(selected.id, { trimStart: Math.max(0, frames(v)) })}
+          />
+        </div>
+      )}
+
+      <Group title="When it shows">
+        <div className="grid grid-cols-1 gap-2.5">
+          <NumRow
+            wide
+            label="Shows at (s)"
+            step={0.1}
+            value={sec(selected.from)}
+            min={0}
+            onChange={(v) => patchLayer(selected.id, { from: Math.max(0, frames(v)) })}
+          />
+          <NumRow
+            wide
+            label="For (s)"
+            step={0.1}
+            value={sec(selected.durationInFrames)}
+            min={0.05}
+            onChange={(v) => patchLayer(selected.id, { durationInFrames: Math.max(1, frames(v)) })}
+          />
+        </div>
+      </Group>
+
+      {selected.type !== "audio" && (
+        <Group title="Comes in">
+          <Select
+            aria-label="How it comes in"
+            value={selected.anim?.preset ?? "none"}
+            onChange={(e) => {
+              const preset = e.target.value as Anim["preset"];
+              const cur = selected.anim ?? { preset: "none", delay: 0, duration: 18 };
+              patchLayer(selected.id, { anim: { ...cur, preset } });
+            }}
+          >
+            <option value="none">Just appears</option>
+            <option value="fade">Fade</option>
+            <option value="rise">Slide up</option>
+            <option value="scale">Pop</option>
+            <option value="hero">Big entrance</option>
+          </Select>
+          {selected.anim && selected.anim.preset !== "none" && (
+            <div className="grid grid-cols-1 gap-2.5">
+              <NumRow
+                wide
+                label="Wait (s)"
+                step={0.1}
+                value={sec(selected.anim.delay)}
+                min={0}
+                onChange={(v) => patchLayer(selected.id, { anim: { ...(selected.anim as Anim), delay: Math.max(0, frames(v)) } })}
+              />
+              <NumRow
+                wide
+                label="Takes (s)"
+                step={0.1}
+                value={sec(selected.anim.duration)}
+                min={0.05}
+                onChange={(v) => patchLayer(selected.id, { anim: { ...(selected.anim as Anim), duration: Math.max(1, frames(v)) } })}
+              />
+            </div>
+          )}
+        </Group>
+      )}
+
+      {selected.type !== "audio" && (
+        <Group title="Place">
+          <div className="flex items-center">
+            <AlignBtn icon={AlignStartVertical} title="Left" onClick={() => align("left")} />
+            <AlignBtn icon={AlignCenterVertical} title="Center" onClick={() => align("hcenter")} />
+            <AlignBtn icon={AlignEndVertical} title="Right" onClick={() => align("right")} />
+            <span className="mx-1 h-4 w-px bg-line-strong" aria-hidden />
+            <AlignBtn icon={AlignStartHorizontal} title="Top" onClick={() => align("top")} />
+            <AlignBtn icon={AlignCenterHorizontal} title="Middle" onClick={() => align("vcenter")} />
+            <AlignBtn icon={AlignEndHorizontal} title="Bottom" onClick={() => align("bottom")} />
+          </div>
+          <details>
+            <summary className="flex min-h-8 cursor-pointer list-none items-center text-[12.5px] text-ink-dim hover:text-ink">More controls ▸</summary>
+            <div className="mt-3 flex flex-col gap-2.5">
+              <div className="grid grid-cols-2 gap-3">
+                <NumRow label="Across" value={selected.x} onChange={(v) => patchLayer(selected.id, { x: v })} />
+                <NumRow label="Down" value={selected.y} onChange={(v) => patchLayer(selected.id, { y: v })} />
+                <NumRow label="Width" value={selected.width} min={1} onChange={(v) => patchLayer(selected.id, { width: Math.max(1, v) })} />
+                <NumRow label="Height" value={selected.height} min={1} onChange={(v) => patchLayer(selected.id, { height: Math.max(1, v) })} />
+                <NumRow label="Turn" value={selected.rotation} onChange={(v) => patchLayer(selected.id, { rotation: v })} />
+                <NumRow label="Corners" value={selected.radius ?? 0} min={0} onChange={(v) => patchLayer(selected.id, { radius: Math.max(0, v) })} />
+                <NumRow label="Outline" value={selected.borderWidth ?? 0} min={0} onChange={(v) => patchLayer(selected.id, { borderWidth: Math.max(0, v) })} />
+                <label className="flex items-center gap-2">
+                  <span className="w-[58px] shrink-0 text-[12.5px] text-ink-dim">Outline colour</span>
+                  <input
+                    type="color"
+                    aria-label="Outline colour"
+                    value={selected.borderColor ?? "#ffffff"}
+                    onChange={(e) => patchLayer(selected.id, { borderColor: e.target.value })}
+                  />
+                </label>
+              </div>
+              <SliderRow
+                label="See-through"
+                min={0}
+                max={1}
+                step={0.05}
+                value={selected.opacity}
+                onChange={(v) => patchLayer(selected.id, { opacity: v })}
+              />
+              <label className="flex flex-col gap-1" title="Marks the part that changes per video when this is saved as a starting point">
+                <span className="text-[12.5px] text-ink-dim">Changes every video (name it)</span>
+                <input
+                  value={selected.slot ?? ""}
+                  placeholder="stays the same"
+                  onChange={(e) => patchLayer(selected.id, { slot: e.target.value.replace(/\s+/g, "_").toLowerCase() || undefined })}
+                  className="uline !py-1 font-mono text-[12.5px]"
+                />
+              </label>
+            </div>
+          </details>
+        </Group>
+      )}
+
+      <Button variant="danger" size="sm" className="self-start" onClick={() => removeLayer(selected.id)}>
+        <Trash2 size={13} aria-hidden /> Remove this (you can undo)
+      </Button>
+    </div>
   );
 }

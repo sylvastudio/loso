@@ -2,71 +2,64 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useEffect, useState } from "react";
-import { LIVE_REQUIRED } from "@/lib/providers";
+import { Settings2 } from "lucide-react";
+import { SettingsSheetProvider, useSettingsSheet } from "@/components/settings/settings-sheet";
 
-interface KeyStatus {
-  id: string;
-  set: boolean;
+// Editor routes bring their own single 52px bar, so the app header steps
+// aside there (no double header). Everywhere else: a thin masthead.
+export function isEditorRoute(pathname: string) {
+  return pathname.startsWith("/edit") || pathname.startsWith("/project/");
 }
 
 export function AppShell({ children }: { children: React.ReactNode }) {
+  return (
+    <SettingsSheetProvider>
+      <Shell>{children}</Shell>
+    </SettingsSheetProvider>
+  );
+}
+
+function Shell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
-  const [keys, setKeys] = useState<KeyStatus[] | null>(null);
-
-  useEffect(() => {
-    fetch("/api/keys")
-      .then((r) => r.json())
-      .then((d) => setKeys(d.keys))
-      .catch(() => setKeys(null));
-  }, [pathname]);
-
-  const nav = [
-    { href: "/", label: "Projects", active: pathname === "/" || pathname.startsWith("/project") },
-    { href: "/settings", label: "Settings", active: pathname.startsWith("/settings") },
-  ];
+  const settings = useSettingsSheet();
+  const editor = isEditorRoute(pathname);
 
   return (
     <div className="flex h-dvh flex-col overflow-hidden">
-      <header className="flex h-[58px] shrink-0 items-center justify-between border-b border-line px-6">
-        <Link href="/" className="flex items-baseline gap-2">
-          <span className="font-serif text-[24px] italic leading-none tracking-tight">
-            Loso
-          </span>
-          <span className="micro translate-y-[-1px] text-ink-dim">studio</span>
-        </Link>
-
-        <nav className="flex items-center gap-7">
-          {nav.map((item) => (
-            <Link
-              key={item.href}
-              href={item.href}
-              className={`relative text-[13.5px] transition-colors ${
-                item.active ? "text-ink" : "text-ink-faint hover:text-ink-dim"
-              }`}
-            >
-              {item.label}
-              {item.active && (
-                <span className="absolute -bottom-[21px] left-0 right-0 h-px bg-lime" />
-              )}
-            </Link>
-          ))}
-
-          <Link
-            href="/settings"
-            title="Provider keys"
-            aria-label={`Provider keys: ${LIVE_REQUIRED.filter((p) => keys?.find((k) => k.id === p.id)?.set).length} of ${LIVE_REQUIRED.length} set`}
-            className="ml-2 flex items-center gap-1.5 border-l border-line pl-6"
-          >
-            {LIVE_REQUIRED.map((p) => {
-              const ok = keys?.find((k) => k.id === p.id)?.set ?? false;
-              return <span key={p.id} className={`led ${ok ? "on" : ""}`} title={`${p.label}: ${ok ? "set" : "missing"}`} />;
-            })}
+      <a
+        href="#main"
+        className="sr-only focus:not-sr-only focus:fixed focus:left-3 focus:top-3 focus:z-[200] focus:bg-lime focus:px-3 focus:py-2 focus:text-[13px] focus:text-black"
+      >
+        Skip to content
+      </a>
+      {!editor && (
+        <header className="flex h-[58px] shrink-0 items-center justify-between border-b border-line px-6">
+          <Link href="/" className="flex items-baseline gap-2" aria-label="Loso, your videos">
+            <span className="font-serif text-[24px] italic leading-none tracking-tight">Loso</span>
           </Link>
-        </nav>
-      </header>
+          <nav aria-label="Main" className="flex items-center gap-6">
+            {pathname.startsWith("/settings") ? (
+              <span aria-current="page" className="flex min-h-10 items-center text-[13.5px] text-ink">
+                Settings
+              </span>
+            ) : (
+              <button
+                type="button"
+                aria-haspopup="dialog"
+                onClick={(e) => settings.open({ opener: e.currentTarget })}
+                title="Settings (⌘ ,)"
+                className="flex min-h-10 items-center gap-1.5 text-[13.5px] text-ink-dim transition-colors hover:text-ink"
+              >
+                <Settings2 size={14} aria-hidden /> Settings
+              </button>
+            )}
+          </nav>
+        </header>
+      )}
 
-      <main className="min-h-0 flex-1 overflow-y-auto">{children}</main>
+      <main id="main" className="min-h-0 flex-1 overflow-y-auto">
+        {children}
+      </main>
     </div>
   );
 }

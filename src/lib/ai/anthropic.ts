@@ -52,7 +52,7 @@ function image(img: ImagePart): ImageBlock {
 
 const omitted = (n: number): TextBlock => ({ type: "text", text: `[${n} image(s) omitted — this model has no vision]` });
 
-export function toAnthropicMessages(messages: ChatMessage[], vision: boolean): AMessage[] {
+export function toAnthropicMessages(messages: ChatMessage[], vision: boolean, keepThinking = true): AMessage[] {
   const out: AMessage[] = [];
   // Consecutive same-role turns are merged: all tool results from one assistant
   // turn land in a single user message (and a following user message joins it).
@@ -84,7 +84,7 @@ export function toAnthropicMessages(messages: ChatMessage[], vision: boolean): A
         (Array.isArray(first?.providerMeta?.anthropicThinking)
           ? (first!.providerMeta!.anthropicThinking as OpaqueBlock[])
           : undefined) ?? (first ? thinkingCache.get(first.id) : undefined);
-      if (thinking) blocks.push(...thinking);
+      if (thinking && keepThinking) blocks.push(...thinking);
       for (const p of m.content) if (p.type === "text" && p.text) blocks.push({ type: "text", text: p.text });
       for (const tc of m.toolCalls ?? []) {
         blocks.push({ type: "tool_use", id: tc.id, name: tc.name, input: tc.args ?? {} });
@@ -137,6 +137,11 @@ export const anthropicAdapter: ChatAdapter = {
       // Newer Claude models reject sampling params; retry once without.
       if (e instanceof ProviderError && e.status === 400 && /temperature/i.test(e.message) && "temperature" in body) {
         delete body.temperature;
+        raw = await send();
+      } else if (e instanceof ProviderError && e.status === 400 && /signature|thinking/i.test(e.message)) {
+        // Thinking blocks are bound to the exact request they came from (system
+        // prompt included); older ones may no longer match. Resend without them.
+        body.messages = toAnthropicMessages(req.messages, cfg.vision, false);
         raw = await send();
       } else throw e;
     }

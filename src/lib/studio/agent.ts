@@ -10,7 +10,6 @@ import type { CompositorDoc } from "../compositor";
 import { appendAgentMessage, listAgentMessages } from "./store";
 import { getTool, runTool, toolInfos, type ToolOutput } from "./tools";
 import { allTemplates } from "./templates";
-import { compositorDocSchema } from "../compositor";
 
 // The in-app studio agent: a tool-calling loop over the user's own model.
 // State lives entirely in the stored chat history, so the loop can pause for
@@ -130,8 +129,6 @@ function hydrate(stored: StoredChatMessage[], vision: boolean): ChatMessage[] {
 
 function systemPrompt(projectId: string, vision: boolean): string {
   const p = getProject(projectId);
-  const parsed = compositorDocSchema.safeParse(p?.settings.compositor ?? {});
-  const doc = parsed.success ? parsed.data : compositorDocSchema.parse({});
   const templates = allTemplates()
     .map((t) => `- ${t.id} "${t.name}": ${t.description.slice(0, 220)}`)
     .join("\n");
@@ -148,8 +145,12 @@ CANVAS
 
 HOW TO WORK
 1. Understand the brief. If the user attached a reference image, study its layout closely (proportions, type, spacing).
-2. Ask before deciding things that are the user's call (on-screen text, sound, style, captions) with ask_user —
-   a few focused questions with suggested options, recommendation first. Don't ask what you can decide yourself.
+2. Decide by default. Make tasteful choices for style, fonts, colours, timing, animation and layout yourself, build
+   it, and say in one line what you chose so the user can change it. A vague brief ("make it nice", "surprise me")
+   means you choose. Ask only when you cannot proceed sensibly without the answer — facts only the user knows (a
+   name or title you can't find in the footage, which file is which when it's genuinely ambiguous). Then use
+   ask_user (never a question in plain chat text): at most once per request, 1–3 questions, each with your best
+   guesses as options, recommendation first. Never end a reply with a question to the user.
 3. Footage: footage_scan the folder, then ${vision ? "footage_contact_sheet each clip to map what is on screen when" : "footage_contact_sheet each clip for scene-change times"}, and
    footage_transcribe clips with speech. Build the story from what is SAID (setup → turn → line to end on);
    cover it with reaction shots; put a lip-synced shot of the speaker on the key line.
@@ -157,6 +158,7 @@ HOW TO WORK
 5. Before cutting, show the plan with propose_storyboard and wait for approval.
 6. footage_cut to the exact size of the video box in your layout; then build/fill the layout (apply_template or
    add_layers) and add_captions (one short line each, ≤ ~40 characters, inside or near the video box, never over titles).
+   Captions are one set (role "caption", the user's "Words on screen"): restyle or move them all together.
 7. ${vision ? "Always snapshot after building or changing a layout, look carefully (wrapping, overlaps, crops, contrast) and fix problems before reporting back." : "You can't see images: reason about geometry carefully (text widths, overlaps) using get_composition."}
 8. Offer to save a design the user likes with save_template (mark the parts that change per video as slots).
 9. render_video only when the user wants the MP4.
@@ -165,23 +167,7 @@ Be concise in chat: say what you did and what you need. Never invent footage con
 TEMPLATES
 ${templates || "(none yet)"}
 
-CURRENT COMPOSITION (summary — call get_composition for every field)
-${summarizeDoc(doc)}`;
-}
-
-/** One line per layer — keeps every model step small (full detail: get_composition). */
-function summarizeDoc(doc: CompositorDoc): string {
-  const { width, height, fps, durationInFrames } = doc.output;
-  const sec = (f: number) => Math.round((f / fps) * 10) / 10;
-  const lines = [...doc.layers]
-    .sort((a, b) => b.z - a.z)
-    .slice(0, 40)
-    .map((l) => {
-      const label = l.type === "text" ? JSON.stringify(l.text.slice(0, 40)) : l.name ? JSON.stringify(l.name) : "";
-      return `- ${l.id} ${l.type}${l.slot ? ` slot=${l.slot}` : ""} ${label} @${l.x},${l.y} ${l.width}×${l.height} z${l.z} ${sec(l.from)}–${sec(l.from + l.durationInFrames)}s`;
-    });
-  const more = doc.layers.length > 40 ? `\n…and ${doc.layers.length - 40} more` : "";
-  return `${width}×${height} @${fps}fps, ${sec(durationInFrames)}s, ${doc.layers.length} layers (top first)\n${lines.join("\n") || "(empty)"}${more}`;
+The user can edit the canvas by hand between your turns: call get_composition at the start of each request.`;
 }
 
 function unresolved(stored: StoredChatMessage[]): { assistantIndex: number; calls: ToolCall[] } | null {

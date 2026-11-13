@@ -11,7 +11,7 @@ export interface RankedModel {
 const NOT_CHAT =
   /whisper|tts|orpheus|playai|speech|audio|transcri|guard|safeguard|moderation|embed|rerank|dall-e|image-gen|imagen|sora|distil|search-preview/i;
 const TOOL_FAMILY =
-  /gpt-oss|qwen3|qwen-?3|qwen2\.5|llama-3\.3|llama-4|kimi-k2|gpt-4\.1|gpt-4o|gpt-5|(^|\/)o\d|claude-(sonnet|opus|haiku)|claude-\d|gemini-.*(pro|flash)|grok-[2-9]|mistral-(large|medium)|devstral|command-r|deepseek-(v3|chat)/i;
+  /gpt-oss|qwen3|qwen-?3|qwen2\.5|llama-3\.3|llama-4|kimi-k2|gpt-4\.1|gpt-4o|gpt-5|(^|\/)o\d|claude-(sonnet|opus|haiku|fable)|claude-\d|gemini-.*(pro|flash)|grok-[2-9]|mistral-(large|medium)|devstral|command-r|deepseek-(v3|chat)/i;
 const VISION =
   /vision|(^|[-_/])vl([-_]|$)|llava|llama-4|gemma-?3|pixtral|gpt-4o|gpt-4\.1|gpt-5|claude|gemini|grok-.*(vision|4)/i;
 
@@ -34,10 +34,14 @@ export function rankModels(ids: string[]): { chat: RankedModel[]; other: string[
     if (size !== null) score += Math.min(size, 120) / 4;
     if (/mini|nano|small|tiny|lite/i.test(id) && (size === null || size < 10)) score -= 25;
     if (/preview|exp(erimental)?|beta/i.test(id)) score -= 10;
+    // Claude tiers: the flagship models first, Haiku is the fast/cheap option.
+    if (/claude-.*(opus|fable)/i.test(id)) score += 8;
+    else if (/claude-.*sonnet/i.test(id)) score += 6;
+    else if (/claude-.*haiku/i.test(id)) score -= 5;
     const dated = /-\d{8}$|-\d{4}-\d{2}-\d{2}$/.test(id);
     if (dated && chatIds.includes(id.replace(/-\d{8}$|-\d{4}-\d{2}-\d{2}$/, ""))) score -= 5;
-    const ver = id.match(/(\d+(?:\.\d+)?)/);
-    if (ver) score += Math.min(Number(ver[1]), 10) * 0.2; // gentle tie-break toward newer versions
+    const ver = id.match(/(\d+)(?:[.-](\d)(?!\d))?/); // "4.1", "5-5" (Claude ids) → 5.5
+    if (ver) score += Math.min(Number(ver[2] ? `${ver[1]}.${ver[2]}` : ver[1]), 10) * 0.2; // gentle tie-break toward newer versions
     return { id, score: Math.round(score * 10) / 10, vision: VISION.test(id) };
   });
   chat.sort((a, b) => b.score - a.score || a.id.localeCompare(b.id));
