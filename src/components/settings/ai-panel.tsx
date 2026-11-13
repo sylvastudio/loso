@@ -8,7 +8,7 @@ import type { ProviderPreset } from "@/lib/ai/presets";
 import type { ProviderPresetId } from "@/lib/ai/types";
 import { Button, ErrorState, InlineError, Input, Section, Select, StatusWord, cx } from "@/components/ui";
 
-type Transcription = "provider" | "local" | "groq";
+type Transcription = "provider" | "local";
 
 interface PublicConfig {
   preset: ProviderPresetId;
@@ -25,7 +25,7 @@ interface PublicConfig {
 interface ConfigPayload {
   config: PublicConfig | null;
   presets: ProviderPreset[];
-  transcription: { engine: string; detail: string; localWhisper: string | null; groqKey: boolean };
+  transcription: { engine: string; detail: string; localWhisper: string | null };
   sharedKeys?: Array<{ preset: string; maskedKey: string }>;
 }
 
@@ -66,7 +66,6 @@ function draftOf(c: PublicConfig | null): Draft {
 const TRANSCRIPTION: Array<{ id: Transcription; label: string }> = [
   { id: "provider", label: "Use my provider" },
   { id: "local", label: "Local Whisper" },
-  { id: "groq", label: "Groq key" },
 ];
 
 export function AiPanel({ onDirtyChange }: { onDirtyChange?: (dirty: boolean) => void }) {
@@ -98,7 +97,7 @@ export function AiPanel({ onDirtyChange }: { onDirtyChange?: (dirty: boolean) =>
   const saved = data?.config ?? null;
   const preset = data?.presets.find((p) => p.id === draft.preset) ?? null;
   const samePreset = saved?.preset === draft.preset;
-  // A key from Settings → Pipeline keys counts too (Groq, Anthropic share it).
+  // Groq and Anthropic keep their key across provider switches, so it may already be saved.
   const sharedKey = data?.sharedKeys?.find((k) => k.preset === draft.preset) ?? null;
   const hasSavedKey = (samePreset && !!saved?.hasKey) || !!sharedKey;
   const showKey = !!preset && (preset.needsKey || preset.id === "custom");
@@ -358,7 +357,7 @@ export function AiPanel({ onDirtyChange }: { onDirtyChange?: (dirty: boolean) =>
                   </div>
                   {(preset.id === "groq" || preset.id === "anthropic") && (
                     <p className="mt-2 text-[12px] leading-relaxed text-ink-faint">
-                      Shared with Settings → Pipeline keys — one {preset.label} key for captions and the agent.
+                      Kept when you switch providers, so you only paste it once.
                     </p>
                   )}
                 </div>
@@ -533,7 +532,7 @@ export function AiPanel({ onDirtyChange }: { onDirtyChange?: (dirty: boolean) =>
                     className={cx(
                       "h-8 px-4 text-[12.5px] transition-colors",
                       i > 0 && "border-l border-line-strong",
-                      on ? "bg-lime font-medium text-black" : "text-ink-dim hover:text-ink"
+                      on ? "bg-lime-fill font-medium text-black" : "text-ink-dim hover:text-ink"
                     )}
                   >
                     {t.label}
@@ -542,7 +541,7 @@ export function AiPanel({ onDirtyChange }: { onDirtyChange?: (dirty: boolean) =>
               })}
             </div>
             <p className="mt-3 text-[12px] leading-relaxed text-ink-faint">
-              {transcriptionNote(draft.transcription, preset, tx.localWhisper, tx.groqKey)}
+              {transcriptionNote(draft.transcription, preset, tx.localWhisper)}
             </p>
             {!dirty && (
               <p className="mt-1.5 text-[12px] text-ink-dim">
@@ -560,7 +559,7 @@ export function AiPanel({ onDirtyChange }: { onDirtyChange?: (dirty: boolean) =>
           dirty || savedFlash ? "translate-y-0 opacity-100" : "translate-y-4 opacity-0"
         }`}
       >
-        <div className="pointer-events-auto flex items-center gap-4 border border-line-strong bg-black/90 py-2.5 pl-5 pr-2.5 backdrop-blur-md">
+        <div className="pointer-events-auto flex items-center gap-4 border border-line-strong bg-ground/90 py-2.5 pl-5 pr-2.5 backdrop-blur-md">
           {savedFlash && !dirty ? (
             <span className="pr-3 text-[13px] text-lime">AI model saved</span>
           ) : (
@@ -611,8 +610,7 @@ function CapToggle({ ok, label, onToggle }: { ok: boolean; label: string; onTogg
 function transcriptionNote(
   choice: Transcription,
   preset: ProviderPreset | null,
-  localWhisper: string | null,
-  groqKey: boolean
+  localWhisper: string | null
 ): string {
   const localLine = localWhisper
     ? `Falls back to ${localWhisper} on this Mac.`
@@ -624,12 +622,7 @@ function transcriptionNote(
     }
     return `${preset.label} has no word-timed speech-to-text. ${localLine}`;
   }
-  if (choice === "local") {
-    return localWhisper
-      ? `Runs ${localWhisper} on this Mac — free and private; slower on long footage.`
-      : "Local Whisper isn't installed — `pip install mlx-whisper` (Apple Silicon) or `pip install openai-whisper`.";
-  }
-  return groqKey
-    ? "Uses the Groq key from API Keys — whisper-large-v3-turbo, fast and cheap."
-    : "No Groq key saved yet — add one under API Keys.";
+  return localWhisper
+    ? `Runs ${localWhisper} on this Mac — free and private; slower on long footage.`
+    : "Local Whisper isn't installed — `pip install mlx-whisper` (Apple Silicon) or `pip install openai-whisper`.";
 }

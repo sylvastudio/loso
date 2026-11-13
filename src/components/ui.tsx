@@ -1,6 +1,6 @@
 "use client";
 
-import { forwardRef, type ButtonHTMLAttributes, type InputHTMLAttributes, type ReactNode, type SelectHTMLAttributes, type TextareaHTMLAttributes } from "react";
+import { forwardRef, type ButtonHTMLAttributes, type InputHTMLAttributes, type ReactNode, type SelectHTMLAttributes } from "react";
 
 export function cx(...parts: Array<string | false | null | undefined>) {
   return parts.filter(Boolean).join(" ");
@@ -11,7 +11,7 @@ export function cx(...parts: Array<string | false | null | undefined>) {
 type ButtonVariant = "primary" | "ghost" | "outline" | "danger";
 
 const buttonStyles: Record<ButtonVariant, string> = {
-  primary: "bg-lime text-black font-semibold hover:bg-lime-deep active:translate-y-px",
+  primary: "bg-lime-fill text-black font-semibold hover:bg-lime-deep active:translate-y-px",
   ghost: "text-ink-dim hover:text-ink",
   outline: "border border-line-strong text-ink hover:border-lime hover:text-lime",
   danger: "text-danger/80 hover:text-danger",
@@ -43,22 +43,6 @@ export const Input = forwardRef<HTMLInputElement, InputHTMLAttributes<HTMLInputE
   }
 );
 
-export const Textarea = forwardRef<
-  HTMLTextAreaElement,
-  TextareaHTMLAttributes<HTMLTextAreaElement>
->(function Textarea({ className, ...props }, ref) {
-  return (
-    <textarea
-      ref={ref}
-      className={cx(
-        "w-full resize-none rounded-lg border border-line bg-panel/60 px-3.5 py-3 text-sm leading-relaxed text-ink outline-none transition-colors placeholder:text-ink-faint focus:border-lime/60",
-        className
-      )}
-      {...props}
-    />
-  );
-});
-
 export const Select = forwardRef<HTMLSelectElement, SelectHTMLAttributes<HTMLSelectElement>>(
   function Select({ className, ...props }, ref) {
     return (
@@ -67,7 +51,7 @@ export const Select = forwardRef<HTMLSelectElement, SelectHTMLAttributes<HTMLSel
         className={cx("uline cursor-pointer appearance-none pr-6", className)}
         style={{
           backgroundImage:
-            "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='11' height='11' viewBox='0 0 24 24' fill='none' stroke='%238f8f97' stroke-width='2.5'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E\")",
+            "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='11' height='11' viewBox='0 0 24 24' fill='none' stroke='%2385857d' stroke-width='2.5'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E\")",
           backgroundRepeat: "no-repeat",
           backgroundPosition: "right 2px center",
         }}
@@ -123,7 +107,7 @@ export function Switch({
       <span
         className={cx(
           "relative h-[18px] w-[34px] rounded-full border transition-colors duration-200",
-          checked ? "border-lime bg-lime" : "border-line-strong bg-transparent group-hover:border-ink-ghost"
+          checked ? "border-lime bg-lime-fill" : "border-line-strong bg-transparent group-hover:border-ink-ghost"
         )}
       >
         <span

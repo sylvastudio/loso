@@ -1,7 +1,6 @@
 import { NextResponse } from "next/server";
 import { PRESETS, publicAiConfig, saveAiConfig, sharedKeysAvailable, type AiConfigPatch } from "@/lib/ai";
 import { localWhisperAvailable, resolveTranscriptionEngine } from "@/lib/ai/transcribe";
-import { getApiKey } from "@/lib/repo";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -14,7 +13,6 @@ function payload() {
     transcription: {
       ...resolveTranscriptionEngine(),
       localWhisper: localWhisperAvailable(),
-      groqKey: getApiKey("groq") !== null,
     },
   };
 }
@@ -40,7 +38,7 @@ export async function PUT(req: Request) {
   if (typeof body.model === "string") patch.model = body.model;
   if (typeof body.vision === "boolean") patch.vision = body.vision;
   if (typeof body.tools === "boolean") patch.tools = body.tools;
-  if (body.transcription === "provider" || body.transcription === "local" || body.transcription === "groq") {
+  if (body.transcription === "provider" || body.transcription === "local") {
     patch.transcription = body.transcription;
   }
   if (typeof body.apiKey === "string" || body.apiKey === null) patch.apiKey = body.apiKey;

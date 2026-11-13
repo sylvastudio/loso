@@ -65,7 +65,7 @@ export function ScreenshotChoice({
             onCancel();
           }
         }}
-        className="pointer-events-auto flex max-w-[560px] items-start gap-4 border border-line-strong bg-black/95 p-4 shadow-[0_30px_80px_-20px_rgba(0,0,0,0.95)]"
+        className="pointer-events-auto flex max-w-[560px] items-start gap-4 border border-line-strong bg-ground/95 p-4 shadow-[0_30px_80px_-20px_var(--color-shade)]"
       >
         {thumb && (
           // eslint-disable-next-line @next/next/no-img-element

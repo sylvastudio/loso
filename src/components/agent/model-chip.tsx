@@ -4,7 +4,8 @@ import { useEffect, useRef, useState } from "react";
 import { Check, ChevronDown, Loader2 } from "lucide-react";
 import { cx } from "@/components/ui";
 import { fetchJson, jsonInit } from "@/lib/fetch-json";
-import { rankModels, type RankedModel } from "@/lib/ai/models";
+import { rankModels, topPicks, type RankedModel } from "@/lib/ai/models";
+import { useChatApi } from "@/components/agent/chat-api";
 
 // The model in use, said like a person would ("Claude Sonnet 4.5 · sees
 // pictures"), switchable in one click from a popover of the best models for
@@ -49,7 +50,8 @@ export function friendlyModel(id: string): string {
 
 /** One line on what a model is good for, from its family. */
 export function goodFor(id: string): string {
-  if (/opus|fable/i.test(id)) return "Smartest, best for big builds";
+  if (/fable/i.test(id)) return "Smartest";
+  if (/opus/i.test(id)) return "Very smart, best for big builds";
   if (/405b|-large|k2/i.test(id)) return "Big builds, slower";
   if (/haiku|mini|nano|flash|small|8b|lite|instant/i.test(id)) return "Fast, good for small tweaks";
   if (/sonnet|gpt-5|gpt-4\.1|gpt-4o|120b|70b|pro/i.test(id)) return "Best all-rounder";
@@ -147,11 +149,13 @@ function ModelPopover({
   const [more, setMore] = useState(false);
   const [switching, setSwitching] = useState<string | null>(null);
 
+  // Inside a chat panel the panel's agent knows where models come from (server or this browser).
+  const api = useChatApi();
   useEffect(() => {
-    fetchJson<{ models: string[] }>("/api/ai/models")
-      .then((d) => setRanked(rankModels(d.models).chat))
+    (api ? api.models() : fetchJson<{ models: string[] }>("/api/ai/models").then((d) => d.models))
+      .then((ids) => setRanked(rankModels(ids).chat))
       .catch((e: Error) => setError(e.message));
-  }, []);
+  }, [api]);
 
   // Modal popover: Esc closes, Tab stays inside, focus returns to the chip.
   useEffect(() => {
@@ -188,7 +192,7 @@ function ModelPopover({
     if (m.id === current || busy) return;
     setSwitching(m.id);
     try {
-      await switchModel(m);
+      await (api ? api.switchModel(m) : switchModel(m));
       onPicked(m);
     } catch (e) {
       setError((e as Error).message);
@@ -196,7 +200,7 @@ function ModelPopover({
     }
   }
 
-  const list = ranked ? (more ? ranked : ranked.slice(0, 3)) : [];
+  const list = ranked ? (more ? ranked : topPicks(ranked, 3)) : [];
   if (ranked && !more && !list.some((m) => m.id === current)) {
     const cur = ranked.find((m) => m.id === current);
     if (cur) list.push(cur);
@@ -208,7 +212,7 @@ function ModelPopover({
       role="dialog"
       aria-modal="true"
       aria-label="Choose the AI model"
-      className="absolute left-0 top-full z-50 mt-2 flex max-h-[60vh] w-[320px] flex-col border border-line-strong bg-black shadow-[0_30px_80px_-20px_rgba(0,0,0,1)]"
+      className="absolute left-0 top-full z-50 mt-2 flex max-h-[60vh] w-[320px] flex-col border border-line-strong bg-ground shadow-[0_30px_80px_-20px_var(--color-shade)]"
       style={{ borderRadius: 2 }}
     >
       <div className="border-b border-line px-4 pb-2.5 pt-3.5">

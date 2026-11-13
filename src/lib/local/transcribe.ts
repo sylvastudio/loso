@@ -22,15 +22,20 @@ export interface LocalTranscript {
 }
 
 const MODEL = "onnx-community/whisper-base_timestamped";
+// Pinned commit (main is mutable): the weights only change when we bump this.
+const MODEL_REVISION = "608c49e61301901684bc36cac8f74b95ff6b5a8e";
 const SAMPLE_RATE = 16000;
+// ONNX Runtime's WASM runs from this site (copied from node_modules by
+// scripts/copy-ort.mjs), never from a third-party CDN.
+const ORT_PATHS = { mjs: "/ort/ort-wasm-simd-threaded.asyncify.mjs", wasm: "/ort/ort-wasm-simd-threaded.asyncify.wasm" };
 
-export async function decodeAudio16k(file: Blob, maxSec: number): Promise<Float32Array> {
+export async function decodeAudio16k(file: Blob, maxSec: number, startSec = 0): Promise<Float32Array> {
   const input = new Input({ source: new BlobSource(file), formats: ALL_FORMATS });
   try {
     const track = await input.getPrimaryAudioTrack();
     if (!track) throw new Error("This clip has no audio track.");
     const parts: AudioBuffer[] = [];
-    for await (const { buffer } of new AudioBufferSink(track).buffers(0, maxSec)) parts.push(buffer);
+    for await (const { buffer } of new AudioBufferSink(track).buffers(startSec, startSec + maxSec)) parts.push(buffer);
     if (parts.length === 0) throw new Error("No audio could be decoded from this clip.");
 
     const srcRate = parts[0].sampleRate;
@@ -68,7 +73,11 @@ let asrPromise: Promise<{ asr: Asr; device: "webgpu" | "wasm" }> | null = null;
 
 function loadAsr(onStatus: (s: string) => void) {
   asrPromise ??= (async () => {
-    const { pipeline } = await import("@huggingface/transformers");
+    const { pipeline, env } = await import("@huggingface/transformers");
+    const onnx = env.backends.onnx as { wasm?: { wasmPaths?: unknown } };
+    if (onnx.wasm) onnx.wasm.wasmPaths = { ...ORT_PATHS };
+    // Load the WASM glue straight from /ort/ (a blob: copy would need script-src blob:).
+    env.useWasmCache = false;
     const hasGpu = typeof navigator !== "undefined" && "gpu" in navigator;
     // Progress fires many times per percent; only report whole-percent steps.
     let last = "";
@@ -82,6 +91,7 @@ function loadAsr(onStatus: (s: string) => void) {
         const asr = await pipeline("automatic-speech-recognition", MODEL, {
           device: "webgpu",
           dtype: { encoder_model: "fp32", decoder_model_merged: "q4" },
+          revision: MODEL_REVISION,
           progress_callback: progress,
         });
         return { asr: asr as unknown as Asr, device: "webgpu" as const };
@@ -92,6 +102,7 @@ function loadAsr(onStatus: (s: string) => void) {
     const asr = await pipeline("automatic-speech-recognition", MODEL, {
       device: "wasm",
       dtype: "q8",
+      revision: MODEL_REVISION,
       progress_callback: progress,
     });
     return { asr: asr as unknown as Asr, device: "wasm" as const };
@@ -102,11 +113,11 @@ function loadAsr(onStatus: (s: string) => void) {
 
 export async function transcribeLocal(
   file: Blob,
-  { maxSec = 30, onStatus = () => {} }: { maxSec?: number; onStatus?: (s: string) => void } = {}
+  { maxSec = 30, startSec = 0, onStatus = () => {} }: { maxSec?: number; startSec?: number; onStatus?: (s: string) => void } = {}
 ): Promise<LocalTranscript> {
   onStatus("Reading audio…");
   const t0 = performance.now();
-  const audio = await decodeAudio16k(file, maxSec);
+  const audio = await decodeAudio16k(file, maxSec, startSec);
   const t1 = performance.now();
   onStatus("Loading speech model…");
   const { asr, device } = await loadAsr(onStatus);

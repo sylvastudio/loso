@@ -6,6 +6,7 @@ import type { EditorBackend, TemplateInfo } from "@/components/compositor/backen
 import { applyTemplate, type Template } from "../templates-core";
 import { resolveDocWith, mediaRefs } from "../compositor";
 import { localAssetUrls } from "./assets";
+import { localChatApi } from "./agent/chat-api";
 import { discardRenderTemp, exportInTab } from "./export";
 import { EXPORTS_DIR, NOTES_DIR, fileAt, freeName, importIntoFolder, listMedia, writeFile } from "./folder";
 import { saveLocalProject, type OpenProject } from "./projects";
@@ -117,6 +118,8 @@ export function localBackend(initial: OpenProject, exportUrl: string | null): Ed
       return path;
     },
 
-    agent: false,
+    // Loso runs in this tab with the user's own Claude key.
+    agent: true,
+    chat: (env) => localChatApi({ projectId: id, dir, ...env }),
   };
 }

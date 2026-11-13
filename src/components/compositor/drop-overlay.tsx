@@ -77,7 +77,7 @@ function Target({
       }}
       className={cx(
         "flex flex-1 flex-col items-center justify-center gap-3 px-10 text-center transition-colors duration-150",
-        off ? "text-ink-faint" : hover ? "bg-lime text-black" : preferred ? "text-ink" : "text-ink-dim"
+        off ? "text-ink-faint" : hover ? "bg-lime-fill text-black" : preferred ? "text-ink" : "text-ink-dim"
       )}
     >
       <p className="font-serif text-[clamp(30px,4vw,52px)] font-light italic leading-none tracking-tight">{title}</p>
@@ -114,7 +114,7 @@ export function DropOverlay({
   const media = types.length === 0 || types.some((t) => /^(video|image|audio)\//.test(t) || t === "");
   return (
     <div
-      className="fixed inset-0 z-[90] flex bg-black/[0.93] backdrop-blur-[2px]"
+      className="fixed inset-0 z-[90] flex bg-ground/[0.93] backdrop-blur-[2px]"
       aria-hidden
     >
       <div className="pointer-events-none absolute inset-x-0 top-6 text-center font-mono text-[11px] uppercase tracking-[0.14em] text-ink-dim">

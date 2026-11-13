@@ -43,6 +43,9 @@ function headers(cfg: AiConfig): Record<string, string> {
     "Content-Type": "application/json",
     "x-api-key": cfg.apiKey ?? "",
     "anthropic-version": VERSION,
+    // The browser-only app calls Anthropic directly with the user's own key
+    // (CORS opt-in). Never used with a shared or owner key.
+    ...(typeof window !== "undefined" ? { "anthropic-dangerous-direct-browser-access": "true" } : {}),
   };
 }
 

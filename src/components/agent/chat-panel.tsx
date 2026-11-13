@@ -13,40 +13,33 @@ import {
 } from "react";
 import { Check, ChevronRight, Loader2, RotateCcw, X } from "lucide-react";
 import { Button, InlineError, cx } from "@/components/ui";
-import { fetchJson } from "@/lib/fetch-json";
+import {
+  ChatApiContext,
+  serverChatApi,
+  useChatApi,
+  type AgentBody,
+  type ChatApi,
+  type LiveEvent,
+  type Stored,
+  type StoredPart,
+  type ToolCall,
+} from "@/components/agent/chat-api";
+import { LocalConnect } from "@/components/agent/local-connect";
+import { LosoMark } from "@/components/logo";
 import type { CompositorDoc } from "@/lib/compositor";
 import { ConnectCard, explainFailure, type ConfigPayload } from "@/components/agent/connect-card";
 import { Composer, useDraft, type ComposerHandle } from "@/components/agent/composer";
-import { ModelChip, bestVisionModel, friendlyModel, switchModel } from "@/components/agent/model-chip";
+import { ModelChip, bestVisionModel, friendlyModel } from "@/components/agent/model-chip";
 import type { DockStatus } from "@/components/agent/chat-dock";
 import type { RankedModel } from "@/lib/ai/models";
 import { AI_CONFIG_CHANGED } from "@/components/agent/use-connect";
 import { useSettingsSheet } from "@/components/settings/settings-sheet";
 
-// ---------- stored message shapes (mirror lib/studio/agent.ts) ----------
-
-type StoredImage = { type: "image"; mime: string; hash: string };
-type StoredPart = { type: "text"; text: string } | StoredImage;
-type ToolCall = { id: string; name: string; args: Record<string, unknown> };
-type Msg =
-  | { role: "user"; content: StoredPart[] }
-  | { role: "assistant"; content: StoredPart[]; toolCalls?: ToolCall[] }
-  | { role: "tool"; toolCallId: string; name: string; content: string; images?: StoredImage[]; isError?: boolean };
-type Stored = { seq: number; turn: string; message: Msg };
-
-type LiveEvent =
-  | { type: "turn"; turn: string }
-  | { type: "text"; text: string }
-  | { type: "tool_start"; id: string; name: string; args: Record<string, unknown> }
-  | { type: "tool_end"; id: string; name: string; ok: boolean; summary: string; images: string[] }
-  | { type: "doc"; doc: CompositorDoc; turn: string }
-  | { type: "waiting"; id: string; name: string; args: Record<string, unknown> }
-  | { type: "done" }
-  | { type: "error"; message: string; code?: string; retryAfterSec?: number };
+// ---------- stored message shapes (see chat-api.ts) ----------
 
 type ToolResult = { content: string; isError?: boolean; images: string[] };
 
-const CONFIRM_TOOLS = new Set(["footage_cut", "render_video"]);
+const CONFIRM_TOOLS = new Set(["footage_cut", "render_video", "delete_template"]);
 const INTERACTIVE = new Set(["ask_user", "propose_storyboard"]);
 
 // ---------- plain words for what Loso did / is doing ----------
@@ -173,8 +166,17 @@ interface AskHandle {
 
 type Question = { id: string; question: string; options?: string[] };
 
-const AskCard = forwardRef<AskHandle, { call: ToolCall; onSubmit: (answer: Record<string, string>) => void; disabled: boolean }>(
-  function AskCard({ call, onSubmit, disabled }, ref) {
+const AskCard = forwardRef<
+  AskHandle,
+  {
+    call: ToolCall;
+    onSubmit: (answer: Record<string, string>) => void;
+    disabled: boolean;
+    /** Esc: step out of the card (to the composer) without answering. */
+    onLeave: () => void;
+  }
+>(
+  function AskCard({ call, onSubmit, disabled, onLeave }, ref) {
     const qs = (Array.isArray(call.args.questions) ? call.args.questions : []) as Question[];
     const [step, setStep] = useState(0);
     const [answers, setAnswers] = useState<Record<string, string>>({});
@@ -227,8 +229,10 @@ const AskCard = forwardRef<AskHandle, { call: ToolCall; onSubmit: (answer: Recor
             setChoice(all[Number(e.key) - 1]);
             setOwn("");
           } else if (e.key === "Escape") {
+            // Leaving isn't answering: "You decide" stays an explicit choice.
             e.preventDefault();
-            commit(DECIDE);
+            e.stopPropagation();
+            onLeave();
           }
         }}
       >
@@ -255,7 +259,7 @@ const AskCard = forwardRef<AskHandle, { call: ToolCall; onSubmit: (answer: Recor
                   className={cx(
                     "flex min-h-10 cursor-pointer items-center gap-1.5 rounded-full border px-4 text-[14px] transition-colors has-[:focus-visible]:outline has-[:focus-visible]:outline-1 has-[:focus-visible]:outline-offset-2 has-[:focus-visible]:outline-lime",
                     on
-                      ? "border-lime bg-lime text-black"
+                      ? "border-lime bg-lime-fill text-black"
                       : best
                         ? "border-lime/70 text-ink hover:bg-lime/10"
                         : decide
@@ -357,6 +361,7 @@ function StoryboardCard({
   };
   const [note, setNote] = useState("");
   const [changing, setChanging] = useState(false);
+  const api = useChatApi();
   return (
     <section aria-labelledby={`${call.id}-h`} className="border-y border-line py-3.5">
       <h3 id={`${call.id}-h`} className="font-mono text-[11px] uppercase tracking-[0.12em] text-lime">
@@ -364,12 +369,14 @@ function StoryboardCard({
       </h3>
       {a.summary && <p className="mt-2 font-serif text-[17px] italic leading-snug text-ink">{a.summary}</p>}
       <ol className="mt-3 flex flex-col">
-        {(a.beats ?? []).map((b, i) => (
+        {(a.beats ?? []).map((b, i) => {
+          const frame = api?.clipFrameUrl(a.folder, b.clip, b.clipTime) ?? null;
+          return (
           <li key={i} className="flex gap-3 border-t border-line py-2.5 first:border-t-0">
-            {a.folder ? (
+            {frame ? (
               // eslint-disable-next-line @next/next/no-img-element
               <img
-                src={`/api/studio/frame?folder=${encodeURIComponent(a.folder)}&clip=${encodeURIComponent(b.clip)}&t=${b.clipTime}`}
+                src={frame}
                 alt={`${b.clip} at ${b.clipTime} seconds`}
                 className="h-[72px] w-[44px] shrink-0 object-cover"
                 loading="lazy"
@@ -385,7 +392,8 @@ function StoryboardCard({
               {b.caption && <p className="mt-0.5 text-[12.5px] text-ink-dim">Words on screen: {b.caption}</p>}
             </div>
           </li>
-        ))}
+          );
+        })}
       </ol>
       {!result && (
         <div className="mt-2 flex flex-col gap-2.5">
@@ -428,11 +436,13 @@ function ConfirmCard({
   const what =
     call.name === "footage_cut"
       ? `Cut ${a.shots?.length ?? 0} shots over ${a.audio?.length ?? 0} sound pieces, ${a.durationSec ?? "?"} seconds long. Takes a minute or two.`
-      : "Make the video file now. Takes about a minute.";
+      : call.name === "delete_template"
+        ? "Delete this saved starting point for good."
+        : "Make the video file now. Takes about a minute.";
   return (
     <section aria-labelledby={`${call.id}-h`} className="border-l-2 border-lime py-1 pl-3.5">
       <h3 id={`${call.id}-h`} className="text-[14px] font-medium text-ink">
-        {call.name === "footage_cut" ? "Ready to cut your video" : "Ready to make the video"}
+        {call.name === "footage_cut" ? "Ready to cut your video" : call.name === "delete_template" ? "Delete a starting point?" : "Ready to make the video"}
       </h3>
       <p className="mt-1 text-[13.5px] leading-relaxed text-ink-dim">{what}</p>
       <div className="mt-2.5 flex gap-2">
@@ -500,7 +510,7 @@ function Steps({ steps }: { steps: StepItem[] }) {
       )}
       {running && (
         <p className="flex items-center gap-2 text-[13px] text-ink">
-          <Loader2 size={13} className="shrink-0 animate-spin text-lime" aria-hidden />
+          <LosoMark working size={16} />
           {toolDoing(running.name, running.args)}…
         </p>
       )}
@@ -531,20 +541,18 @@ export const STARTERS = [
 
 type Attachment = { mime: string; data: string; name: string; file: File; thumb: string };
 
-export function ChatPanel({
-  projectId,
-  onDoc,
-  onBusyChange,
-  beforeSend,
-  canUndoTurn,
-  onUndoTurn,
-  dockControls,
-  controlRef,
-  onStatus,
-  announce,
-  dockOpen,
-  onPutInVideo,
-}: {
+/** The chat with Loso. `api` = where the agent runs (default: the dev server). */
+export function ChatPanel(props: ChatPanelProps & { api?: ChatApi }) {
+  const { api: given, projectId } = props;
+  const api = useMemo(() => given ?? serverChatApi(projectId), [given, projectId]);
+  return (
+    <ChatApiContext.Provider value={api}>
+      <ChatPanelInner {...props} api={api} />
+    </ChatApiContext.Provider>
+  );
+}
+
+interface ChatPanelProps {
   projectId: string;
   onDoc: (doc: CompositorDoc, turn: string) => void;
   onBusyChange: (busy: boolean) => void;
@@ -560,7 +568,23 @@ export function ChatPanel({
   dockOpen?: boolean;
   /** "Put it in the video instead" on a picture chip: the editor adds it as a piece. */
   onPutInVideo?: (file: File) => void;
-}) {
+}
+
+function ChatPanelInner({
+  api,
+  projectId,
+  onDoc,
+  onBusyChange,
+  beforeSend,
+  canUndoTurn,
+  onUndoTurn,
+  dockControls,
+  controlRef,
+  onStatus,
+  announce,
+  dockOpen,
+  onPutInVideo,
+}: ChatPanelProps & { api: ChatApi}) {
   const settings = useSettingsSheet();
   const [payload, setPayload] = useState<ConfigPayload | undefined>(undefined);
   const [configError, setConfigError] = useState<string | null>(null);
@@ -574,8 +598,8 @@ export function ChatPanel({
   const [live, setLive] = useState<LiveEvent[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [draft, setDraft] = useDraft(`loso:draft:${projectId}`);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
+  const [draft, setDraft] = useDraft(`loso:draft:${projectId}`, attachments.length === 0);
   const [lastTurn, setLastTurn] = useState<string | null>(null);
   const [receipts, setReceipts] = useState<Array<{ afterSeq: number; text: string }>>([]);
   const [confirmClear, setConfirmClear] = useState(false);
@@ -590,20 +614,27 @@ export function ChatPanel({
   const stoppedRef = useRef(false);
 
   const loadHistory = useCallback(async () => {
-    const d = await fetchJson<{ messages: Stored[] }>(`/api/projects/${projectId}/agent`);
-    setHistory(d.messages);
-    setLastTurn(d.messages.at(-1)?.turn ?? null);
-    return d.messages;
-  }, [projectId]);
+    const messages = await api.history();
+    setHistory(messages);
+    setLastTurn(messages.at(-1)?.turn ?? null);
+    return messages;
+  }, [api]);
 
+  // Never wait forever on "Getting Loso ready…": after 15s it says so, with Try again.
   const loadConfig = useCallback(async () => {
+    setConfigError(null);
+    let timer: ReturnType<typeof setTimeout> | undefined;
     try {
-      setPayload(await fetchJson<ConfigPayload>("/api/ai/config"));
-      setConfigError(null);
+      const slow = new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error("it took too long")), 15_000);
+      });
+      setPayload(await Promise.race([api.config(), slow]));
     } catch (e) {
       setConfigError((e as Error).message);
+    } finally {
+      clearTimeout(timer);
     }
-  }, []);
+  }, [api]);
 
   useEffect(() => {
     loadConfig();
@@ -645,7 +676,7 @@ export function ChatPanel({
     async (body: Record<string, unknown>) => {
       setError(null);
       setErrorCode(null);
-      if (!(await beforeSend())) {
+      if (!(await beforeSend().catch(() => false))) {
         setError("Couldn't save your latest changes, so Loso didn't start.");
         return;
       }
@@ -658,30 +689,9 @@ export function ChatPanel({
       setLive([]);
       announce?.("Loso is thinking");
       try {
-        const res = await fetch(`/api/projects/${projectId}/agent`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(body),
-          signal: ac.signal,
-        });
-        if (!res.ok || !res.body) {
-          const t = await res.text();
-          throw new Error((() => { try { return JSON.parse(t).error; } catch { return t || `Request failed (${res.status})`; } })());
-        }
-        const reader = res.body.getReader();
-        const dec = new TextDecoder();
-        let buf = "";
-        for (;;) {
-          const { value, done } = await reader.read();
-          if (done) break;
-          buf += dec.decode(value, { stream: true });
-          let i;
-          while ((i = buf.indexOf("\n\n")) >= 0) {
-            const chunk = buf.slice(0, i);
-            buf = buf.slice(i + 2);
-            const line = chunk.split("\n").find((l) => l.startsWith("data: "));
-            if (!line) continue;
-            const ev = JSON.parse(line.slice(6)) as LiveEvent;
+        await api.run(
+          body as AgentBody,
+          (ev) => {
             if (ev.type === "doc") onDoc(ev.doc, ev.turn);
             else if (ev.type === "turn") setLastTurn(ev.turn);
             else if (ev.type === "tool_start") announce?.(toolDoing(ev.name, ev.args));
@@ -692,8 +702,9 @@ export function ChatPanel({
               if (ev.code === "no_model") loadConfig();
             }
             if (ev.type !== "doc") setLive((l) => [...l, ev]);
-          }
-        }
+          },
+          ac.signal
+        );
       } catch (e) {
         if ((e as Error).name !== "AbortError") setError((e as Error).message);
       } finally {
@@ -718,7 +729,7 @@ export function ChatPanel({
         setUnread(true);
       }
     },
-    [projectId, onDoc, beforeSend, loadHistory, loadConfig, announce]
+    [api, onDoc, beforeSend, loadHistory, loadConfig, announce]
   );
 
   const resume = (toolCallId: string, p: Record<string, unknown>) => {
@@ -735,7 +746,7 @@ export function ChatPanel({
         m.set(s.message.toolCallId, {
           content: s.message.content,
           isError: s.message.isError,
-          images: (s.message.images ?? []).map((i) => `/api/assets/${i.hash}`),
+          images: (s.message.images ?? []).map((i) => api.imageUrl(i)).filter(Boolean),
         });
       }
     }
@@ -761,7 +772,12 @@ export function ChatPanel({
     if (pendingAsk) return "Loso has a question";
     if (!busy) return null;
     const running = [...live].reverse().find((e) => e.type === "tool_start" && !results.has(e.id));
-    if (running && running.type === "tool_start") return toolDoing(running.name, running.args);
+    if (running && running.type === "tool_start") {
+      // A long step (model download, transcribing) reports its own progress.
+      const after = live.slice(live.lastIndexOf(running) + 1);
+      const progress = [...after].reverse().find((e) => e.type === "progress");
+      return progress && progress.type === "progress" ? progress.text : toolDoing(running.name, running.args);
+    }
     if (live.at(-1)?.type === "text") return "Writing back";
     return "Thinking";
   }, [busy, live, results, pendingAsk]);
@@ -804,10 +820,11 @@ export function ChatPanel({
   const needsVision = attachments.length > 0 && !!cfg && !vision && !dismissedVision;
   useEffect(() => {
     if (!needsVision || visionPick !== undefined || !cfg) return;
-    fetchJson<{ models: string[] }>("/api/ai/models")
-      .then((d) => setVisionPick(bestVisionModel(d.models, cfg.model)))
+    api
+      .models()
+      .then((ids) => setVisionPick(bestVisionModel(ids, cfg.model)))
       .catch(() => setVisionPick(null));
-  }, [needsVision, visionPick, cfg]);
+  }, [needsVision, visionPick, cfg, api]);
 
   useImperativeHandle(controlRef, () => ({
     focus: () => (pendingAsk ? askRef.current?.focus() : composerRef.current?.focus()),
@@ -860,7 +877,7 @@ export function ChatPanel({
   }
 
   async function clearChat() {
-    await fetch(`/api/projects/${projectId}/agent`, { method: "DELETE" });
+    await api.clear();
     setHistory([]);
     setLastTurn(null);
     setReceipts([]);
@@ -883,8 +900,15 @@ export function ChatPanel({
       <>
         {header(null)}
         <div className="flex flex-col gap-2 p-5">
-          <InlineError>{`Couldn't load the AI settings (${configError}).`}</InlineError>
-          <button type="button" onClick={loadConfig} className="min-h-10 self-start text-[13px] text-lime hover:underline">
+          <InlineError>{`Loso couldn't get ready (${configError}).`}</InlineError>
+          <button
+            type="button"
+            onClick={() => {
+              setPayload(undefined);
+              loadConfig();
+            }}
+            className="min-h-10 self-start text-[13px] text-lime hover:underline"
+          >
             Try again
           </button>
         </div>
@@ -895,7 +919,8 @@ export function ChatPanel({
     return (
       <>
         {header(null)}
-        <p className="p-5 text-[13px] text-ink-dim" role="status">
+        <p className="flex items-center gap-2.5 p-5 text-[13px] text-ink-dim" role="status">
+          <LosoMark working size={18} />
           Getting Loso ready…
         </p>
       </>
@@ -926,18 +951,31 @@ export function ChatPanel({
           </button>
         )}
         <div className="min-h-0 flex-1 overflow-y-auto">
-          <ConnectCard
-            key={`${cfg?.preset}-${cfg?.model}-${!!connect}`}
-            payload={payload}
-            notice={notice}
-            onCancel={connect && !notConnected && !failedTest ? () => setConnect(null) : undefined}
-            onConnected={async () => {
-              setConnect(null);
-              setError(null);
-              setErrorCode(null);
-              await loadConfig();
-            }}
-          />
+          {api.local ? (
+            <LocalConnect
+              notice={notice}
+              onCancel={connect && !notConnected && !failedTest ? () => setConnect(null) : undefined}
+              onConnected={async () => {
+                setConnect(null);
+                setError(null);
+                setErrorCode(null);
+                await loadConfig();
+              }}
+            />
+          ) : (
+            <ConnectCard
+              key={`${cfg?.preset}-${cfg?.model}-${!!connect}`}
+              payload={payload}
+              notice={notice}
+              onCancel={connect && !notConnected && !failedTest ? () => setConnect(null) : undefined}
+              onConnected={async () => {
+                setConnect(null);
+                setError(null);
+                setErrorCode(null);
+                await loadConfig();
+              }}
+            />
+          )}
         </div>
       </>
     );
@@ -947,7 +985,7 @@ export function ChatPanel({
   async function runTest() {
     setTesting(true);
     try {
-      await fetchJson("/api/ai/test", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+      await api.test();
     } catch {
       /* the result is recorded server-side either way */
     } finally {
@@ -1038,7 +1076,7 @@ export function ChatPanel({
           {busy ? (
             <>
               <p className="flex min-h-10 items-center gap-2.5 px-4 text-[13.5px] text-ink">
-                <span className="orb working" aria-hidden />
+                <LosoMark working size={18} />
                 <span className="min-w-0 flex-1 truncate">{phase}…</span>
                 {elapsed >= 20 && <span className="font-mono text-[12px] text-ink-dim">{elapsed}s</span>}
               </p>
@@ -1108,7 +1146,7 @@ export function ChatPanel({
                     )
                   ) : (
                     // eslint-disable-next-line @next/next/no-img-element
-                    <img key={i} src={`/api/assets/${p.hash}`} alt="A picture you gave Loso" className="max-h-40" />
+                    <img key={i} src={api.imageUrl(p)} alt="A picture you gave Loso" className="max-h-40" />
                   )
                 )}
               </div>
@@ -1196,6 +1234,7 @@ export function ChatPanel({
             call={pendingAsk}
             disabled={busy}
             onSubmit={(answer) => resume(pendingAsk.id, { answer })}
+            onLeave={() => composerRef.current?.focus()}
           />
         </div>
       )}
@@ -1252,7 +1291,7 @@ export function ChatPanel({
                     size="sm"
                     onClick={async () => {
                       try {
-                        await switchModel(visionPick);
+                        await api.switchModel(visionPick);
                         const name = friendlyModel(visionPick.id);
                         setReceipts((r) => [...r, { afterSeq: lastSeq, text: `Switched to ${name}` }]);
                         announce?.(`Switched to ${name}`);

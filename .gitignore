@@ -5,3 +5,11 @@ data/
 .DS_Store
 package-lock.json
 tsconfig.tsbuildinfo
+
+# static build output
+out/
+.static-build/
+public/ort/
+
+# Local Netlify folder
+.netlify

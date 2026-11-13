@@ -1,8 +1,6 @@
 import crypto from "node:crypto";
 import { getDb } from "./db";
-import { brandSchema, defaultBrand, type Brand } from "./brand";
-import type { CompositorDoc } from "./compositor";
-import type { ProviderId } from "./providers";
+import { compositorDocSchema, type CompositorDoc } from "./compositor";
 
 // ---------- kv ----------
 
@@ -25,13 +23,18 @@ function kvDelete(key: string) {
   getDb().prepare("DELETE FROM kv WHERE key = ?").run(key);
 }
 
-// ---------- API keys (server-side only; never returned raw to the client) ----------
+// ---------- provider keys (server-side only; never returned raw to the client) ----------
+// Groq and Anthropic keep their AI key in a per-provider row ("key.groq",
+// "key.anthropic"), so switching the agent between them never loses a key.
+// Every other provider uses the single "ai.key" row below.
 
-export function getApiKey(provider: ProviderId): string | null {
+export type KeyedProvider = "groq" | "anthropic";
+
+export function getApiKey(provider: KeyedProvider): string | null {
   return kvGet(`key.${provider}`);
 }
 
-export function setApiKey(provider: ProviderId, value: string) {
+export function setApiKey(provider: KeyedProvider, value: string) {
   if (value.trim() === "") kvDelete(`key.${provider}`);
   else kvSet(`key.${provider}`, value.trim());
 }
@@ -68,74 +71,20 @@ export function setAiLastTestRaw(json: string | null) {
   else kvSet("ai.lastTest", json);
 }
 
-// ---------- pronunciation dictionary ----------
-
-export interface PronunciationEntry {
-  match: string;
-  replacement: string;
-}
-
-export function getPronunciations(): PronunciationEntry[] {
-  const raw = kvGet("pronunciations");
-  if (!raw) return [];
-  try {
-    return JSON.parse(raw);
-  } catch {
-    return [];
-  }
-}
-
-export function setPronunciations(entries: PronunciationEntry[]) {
-  kvSet("pronunciations", JSON.stringify(entries));
-}
-
-// ---------- provider usage counters ----------
-
-export function bumpUsage(provider: string, metric: string, amount: number) {
-  const key = `usage.${provider}.${metric}`;
-  const current = Number(kvGet(key) ?? 0);
-  kvSet(key, String(current + amount));
-}
-
-export function getUsage(): Record<string, number> {
-  const rows = getDb()
-    .prepare("SELECT key, value FROM kv WHERE key LIKE 'usage.%'")
-    .all() as Array<{ key: string; value: string }>;
-  return Object.fromEntries(rows.map((r) => [r.key.slice(6), Number(r.value)]));
-}
-
-// ---------- brand ----------
-
-export function getBrand(): Brand {
-  const raw = kvGet("brand");
-  if (!raw) return defaultBrand;
-  try {
-    return brandSchema.parse(JSON.parse(raw));
-  } catch {
-    return defaultBrand;
-  }
-}
-
-export function setBrand(brand: Brand) {
-  kvSet("brand", JSON.stringify(brand));
-}
-
 // ---------- projects ----------
 
 export interface ProjectSettings {
-  kind?: "ai-short" | "compositor";
-  pace: "single" | "chill" | "normal" | "fast";
-  captionStyle: "clean" | "dynamic";
-  voiceId: string | null;
-  voice?: { stability: number; similarity: number; style: number; speed: number };
-  // Present only for compositor projects — the full layer document.
+  /** "compositor" for every project Loso makes. Rows from the retired
+   *  script-to-voiceover pipeline carry another kind (or none) and are
+   *  kept but not opened. */
+  kind?: string;
+  /** The full layer document. */
   compositor?: CompositorDoc;
 }
 
 export interface Project {
   id: string;
   title: string;
-  script: string;
   settings: ProjectSettings;
   artifacts: Record<string, unknown>;
   createdAt: number;
@@ -145,37 +94,33 @@ export interface Project {
 interface ProjectRow {
   id: string;
   title: string;
-  script: string;
   settings: string;
   artifacts: string;
   created_at: number;
   updated_at: number;
 }
 
-const defaultSettings: ProjectSettings = {
-  kind: "ai-short",
-  pace: "normal",
-  captionStyle: "clean",
-  voiceId: null,
-};
-
 function rowToProject(row: ProjectRow): Project {
   return {
     id: row.id,
     title: row.title,
-    script: row.script,
-    settings: { ...defaultSettings, ...JSON.parse(row.settings) },
+    settings: JSON.parse(row.settings),
     artifacts: JSON.parse(row.artifacts),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
 }
 
+export function isCompositorProject(p: Project): boolean {
+  return p.settings.kind === "compositor";
+}
+
+/** Compositor projects only; legacy rows stay in the table untouched. */
 export function listProjects(): Project[] {
   const rows = getDb()
     .prepare("SELECT * FROM projects ORDER BY updated_at DESC")
     .all() as ProjectRow[];
-  return rows.map(rowToProject);
+  return rows.map(rowToProject).filter(isCompositorProject);
 }
 
 export function getProject(id: string): Project | null {
@@ -185,42 +130,32 @@ export function getProject(id: string): Project | null {
   return row ? rowToProject(row) : null;
 }
 
-export function createProject(input: {
-  title: string;
-  script: string;
-  settings?: Partial<ProjectSettings>;
-}): Project {
+/** A new, empty compositor project (an optional starting doc). */
+export function createProject(input: { title: string; doc?: CompositorDoc }): Project {
   const now = Date.now();
   const id = crypto.randomUUID().slice(0, 8);
+  const settings: ProjectSettings = { kind: "compositor", compositor: input.doc ?? compositorDocSchema.parse({}) };
   getDb()
     .prepare(
-      "INSERT INTO projects (id, title, script, settings, artifacts, created_at, updated_at) VALUES (?, ?, ?, ?, '{}', ?, ?)"
+      "INSERT INTO projects (id, title, settings, artifacts, created_at, updated_at) VALUES (?, ?, ?, '{}', ?, ?)"
     )
-    .run(
-      id,
-      input.title,
-      input.script,
-      JSON.stringify({ ...defaultSettings, ...input.settings }),
-      now,
-      now
-    );
+    .run(id, input.title, JSON.stringify(settings), now, now);
   return getProject(id)!;
 }
 
 export function updateProject(
   id: string,
-  patch: Partial<Pick<Project, "title" | "script" | "settings" | "artifacts">>
+  patch: Partial<Pick<Project, "title" | "settings" | "artifacts">>
 ): Project | null {
   const current = getProject(id);
   if (!current) return null;
   const next = { ...current, ...patch, settings: { ...current.settings, ...patch.settings } };
   getDb()
     .prepare(
-      "UPDATE projects SET title = ?, script = ?, settings = ?, artifacts = ?, updated_at = ? WHERE id = ?"
+      "UPDATE projects SET title = ?, settings = ?, artifacts = ?, updated_at = ? WHERE id = ?"
     )
     .run(
       next.title,
-      next.script,
       JSON.stringify(next.settings),
       JSON.stringify(next.artifacts),
       Date.now(),

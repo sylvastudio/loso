@@ -127,7 +127,7 @@ export function useLosoInbox({
       if (!notice) return null;
       return (
         <div className="pointer-events-none absolute inset-x-0 bottom-14 z-[60] flex justify-center px-4" style={{ right }}>
-          <p className="pointer-events-auto flex items-center gap-3 border border-lime/50 bg-black/95 py-1.5 pl-4 pr-1.5 text-[13px] text-ink">
+          <p className="pointer-events-auto flex items-center gap-3 border border-lime/50 bg-ground/95 py-1.5 pl-4 pr-1.5 text-[13px] text-ink">
             {notice}
             <button type="button" onClick={() => setNotice(null)} className="h-8 px-2 text-ink-dim hover:text-ink" aria-label="Dismiss">
               OK

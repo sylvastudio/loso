@@ -3,9 +3,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { ArrowRight, FolderOpen, Loader2, X } from "lucide-react";
+import { ArrowRight, FolderOpen, X } from "lucide-react";
 import { Thumbnail } from "@remotion/player";
 import { Button, Field, InlineError, Input, cx } from "@/components/ui";
+import { LosoMark } from "@/components/logo";
 import { CompositorComposition } from "@/remotion/compositor";
 import { mediaRefs, resolveDocWith, type CompositorDoc, type ResolvedCompositorDoc } from "@/lib/compositor";
 import { folderAccessSupported, folderPermission, listFiles, pickFolder, requestFolderPermission } from "@/lib/local/folder";
@@ -159,7 +160,7 @@ function NewProjectModal({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-6 backdrop-blur-[2px]"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-scrim p-6 backdrop-blur-[2px]"
       onMouseDown={(e) => e.target === e.currentTarget && !title.trim() && onClose()}
     >
       <div
@@ -167,7 +168,7 @@ function NewProjectModal({
         role="dialog"
         aria-modal="true"
         aria-labelledby="new-project-title"
-        className="rise max-h-full w-full max-w-lg overflow-y-auto border border-line-strong bg-black shadow-[0_40px_120px_-30px_rgba(0,0,0,1)]"
+        className="rise max-h-full w-full max-w-lg overflow-y-auto border border-line-strong bg-ground shadow-[0_40px_120px_-30px_var(--color-shade)]"
       >
         <header className="border-b border-line px-7 pb-5 pt-6">
           <h2 id="new-project-title" className="font-serif text-[26px] italic tracking-tight">
@@ -245,6 +246,7 @@ function ServerProjects({ onMoved }: { onMoved: (id: string) => void }) {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    if (process.env.NEXT_PUBLIC_LOSO_STATIC) return; // the public site has no server projects
     fetch("/api/projects")
       .then((r) => (r.ok ? r.json() : Promise.reject()))
       .then((d: { projects: ServerProject[] }) =>
@@ -289,8 +291,8 @@ function ServerProjects({ onMoved }: { onMoved: (id: string) => void }) {
             <span className="min-w-0 flex-1 truncate font-serif text-[16px] italic">{p.title}</span>
             <span className="font-mono text-[11px] text-ink-dim">{timeAgo(p.updatedAt)}</span>
             {busy?.id === p.id ? (
-              <span className="micro flex items-center gap-2 text-lime">
-                <Loader2 size={11} className="animate-spin" /> {busy.status}
+              <span role="status" className="micro flex items-center gap-2 text-lime">
+                <LosoMark working size={16} /> {busy.status}
               </span>
             ) : (
               <>
@@ -502,7 +504,7 @@ export default function ProjectsPage() {
                 </p>
               </div>
               <Button onClick={openFolder} disabled={!!busy} className="h-12 shrink-0 px-6 text-[15px]">
-                {busy ? <Loader2 size={16} className="animate-spin" aria-hidden /> : <FolderOpen size={16} aria-hidden />}
+                {busy ? <LosoMark working size={18} /> : <FolderOpen size={16} aria-hidden />}
                 {busy ? "Opening…" : "Open your folder"}
               </Button>
             </div>
@@ -587,7 +589,8 @@ export default function ProjectsPage() {
           Your videos
         </h2>
         {projects === null && (
-          <p className="py-10 text-[13.5px] text-ink-dim" role="status">
+          <p className="flex items-center gap-2.5 py-10 text-[13.5px] text-ink-dim" role="status">
+            <LosoMark working size={18} />
             Looking for your videos…
           </p>
         )}
@@ -609,7 +612,7 @@ export default function ProjectsPage() {
                   >
                     <span className="w-6 shrink-0 font-mono text-[12px] text-ink-dim">{String(i + 1).padStart(2, "0")}</span>
                     <span
-                      className="relative block h-14 shrink-0 overflow-hidden bg-void outline outline-1 outline-line-strong transition-[outline-color] group-hover:outline-lime/70"
+                      className="relative block h-14 shrink-0 overflow-hidden bg-stage outline outline-1 outline-line-strong transition-[outline-color] group-hover:outline-lime/70"
                       style={{ aspectRatio: `${p.width} / ${p.height}` }}
                       aria-hidden
                     >
@@ -662,7 +665,7 @@ export default function ProjectsPage() {
             onMouseLeave={() => (toastHold.current = false)}
             onFocus={() => (toastHold.current = true)}
             onBlur={() => (toastHold.current = false)}
-            className="pointer-events-auto flex items-center gap-4 border border-line-strong bg-black/95 py-2 pl-5 pr-2 backdrop-blur-md"
+            className="pointer-events-auto flex items-center gap-4 border border-line-strong bg-ground/95 py-2 pl-5 pr-2 backdrop-blur-md"
           >
             <span className="max-w-[340px] truncate text-[13.5px] text-ink-dim">
               Removed <span className="font-serif italic text-ink">{removed.title}</span> · the file stays in your folder

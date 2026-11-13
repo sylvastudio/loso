@@ -54,3 +54,17 @@ export function pickDefaultModel(ids: string[], current?: string): string {
   if (current && chat.some((m) => m.id === current)) return current;
   return chat[0]?.id ?? "";
 }
+
+/** The best few models for a short list: only the newest of each family (no "Opus 5" next to "Opus 5.5"). */
+export function topPicks(chat: RankedModel[], n: number): RankedModel[] {
+  const seen = new Set<string>();
+  const out: RankedModel[] = [];
+  for (const m of chat) {
+    const family = m.id.toLowerCase().replace(/[-.:@]?\d.*$/, "");
+    if (seen.has(family)) continue;
+    seen.add(family);
+    out.push(m);
+    if (out.length === n) break;
+  }
+  return out;
+}

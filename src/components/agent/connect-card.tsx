@@ -140,7 +140,7 @@ export function ConnectCard({
               {existingKey && !replacingKey ? (
                 <p className="flex flex-wrap items-center gap-x-2 text-[12.5px] text-ink-dim">
                   <Check size={12} className="text-lime" />
-                  {existingKey.shared ? `Using your ${preset.label} key from Pipeline keys` : "Saved key"}
+                  {existingKey.shared ? `Using your saved ${preset.label} key` : "Saved key"}
                   <span className="font-mono text-[11px] text-ink-faint">{existingKey.masked}</span>
                   <button type="button" onClick={() => setReplacingKey(true)} className="text-[12px] text-ink-faint underline-offset-2 hover:text-ink hover:underline">
                     Use a different key
@@ -164,7 +164,7 @@ export function ConnectCard({
                 </div>
               )}
               {(preset.id === "groq" || preset.id === "anthropic") && (
-                <p className="mt-1.5 text-[11px] text-ink-faint">Shared with Settings → Pipeline keys.</p>
+                <p className="mt-1.5 text-[11px] text-ink-faint">Kept when you switch providers.</p>
               )}
             </div>
           )}

@@ -3,12 +3,13 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { ChevronRight, PanelRightClose, PanelRightOpen } from "lucide-react";
 import { cx } from "@/components/ui";
+import { LosoMark } from "@/components/logo";
 
 // The floating chat dock: Loso's home in the editor. It floats over the
 // right edge of the stage (the stage never reflows), and has three states:
 //   open   — 400px (360–520, drag the left hairline), the whole chat
-//   peek   — a 64px spine: the orb, what Loso is doing, click to open
-//   closed — a pill bottom-right: orb + "Talk to Loso" / the current step
+//   peek   — a 64px spine: Loso's mark, what Loso is doing, click to open
+//   closed — a pill bottom-right: the mark + "Talk to Loso" / the current step
 // The chat inside stays mounted in every state so a running turn survives.
 
 export type DockState = "open" | "peek" | "closed";
@@ -46,23 +47,66 @@ function write(key: string, value: unknown) {
   }
 }
 
-/** Dock state + width, remembered per project. Narrow windows start in peek. */
+/** Below this window width the open dock would squeeze the video too far. */
+export const NARROW_W = 1100;
+
+const isNarrow = () => typeof window !== "undefined" && window.innerWidth < NARROW_W;
+
+function useNarrow() {
+  // The editor mounts on the client only (after the project loads), so the
+  // first render can read the window directly: no flash of an open dock.
+  const [narrow, setNarrow] = useState(isNarrow);
+  useEffect(() => {
+    const mq = window.matchMedia(`(max-width: ${NARROW_W - 0.02}px)`);
+    const on = () => setNarrow(mq.matches);
+    on();
+    mq.addEventListener("change", on);
+    return () => mq.removeEventListener("change", on);
+  }, []);
+  return narrow;
+}
+
+type Saved = { state?: DockState; width?: number } | null;
+
+/**
+ * Dock state + width, remembered per project. In a narrow window the dock
+ * always starts folded to the side (peek), whatever was remembered, and
+ * folds itself when the window gets narrow; it comes back when the window is
+ * wide again. Opening it by hand in a narrow window still works (the editor
+ * then hides the pieces rail so the video keeps its room).
+ */
 export function useDockState(projectId: string) {
   const key = `loso:dock:${projectId}`;
-  const [state, setStateRaw] = useState<DockState>("open");
-  const [width, setWidthRaw] = useState(DOCK_DEFAULT);
+  const narrow = useNarrow();
+  // The state the user chose, which a narrow window may be overriding.
+  const wanted = useRef<DockState>("open");
+  const [state, setStateRaw] = useState<DockState>(() => {
+    wanted.current = read<Saved>(key, null)?.state ?? "open";
+    return isNarrow() && wanted.current === "open" ? "peek" : wanted.current;
+  });
+  const [width, setWidthRaw] = useState(() => {
+    const w = read<Saved>(key, null)?.width;
+    return w ? Math.min(DOCK_MAX, Math.max(DOCK_MIN, w)) : DOCK_DEFAULT;
+  });
+  const first = useRef(true);
   useEffect(() => {
-    const saved = read<{ state?: DockState; width?: number } | null>(key, null);
-    if (saved?.state) setStateRaw(saved.state);
-    else if (window.innerWidth < 1100) setStateRaw("peek");
-    if (saved?.width) setWidthRaw(Math.min(DOCK_MAX, Math.max(DOCK_MIN, saved.width)));
-  }, [key]);
+    if (first.current) {
+      first.current = false;
+      return;
+    }
+    setStateRaw(narrow && wanted.current === "open" ? "peek" : wanted.current);
+  }, [narrow]);
   const setState = useCallback(
     (s: DockState) => {
       setStateRaw(s);
-      write(key, { ...read(key, {}), state: s });
+      // An "open" chosen in a narrow window isn't remembered as the default:
+      // next time a narrow window starts folded again.
+      if (!(narrow && s === "open")) {
+        wanted.current = s;
+        write(key, { ...read(key, {}), state: s });
+      }
     },
-    [key]
+    [key, narrow]
   );
   const setWidth = useCallback(
     (w: number) => {
@@ -72,7 +116,7 @@ export function useDockState(projectId: string) {
     },
     [key]
   );
-  return { state, setState, width, setWidth };
+  return { state, setState, width, setWidth, narrow };
 }
 
 /** Space the stage keeps clear for the dock (a soft safe area, not a column). */
@@ -110,11 +154,13 @@ export function useAnnouncer() {
   return { message, announce };
 }
 
-export function Orb({ status, className }: { status: DockStatus; className?: string }) {
+/** Loso's mark: the Onion Skin spinner while Loso works, the still mark otherwise. */
+export function Orb({ status, className, size = 18 }: { status: DockStatus; className?: string; size?: number }) {
   return (
-    <span
-      aria-hidden
-      className={cx("orb", status.busy ? "working" : status.question || status.unread ? "" : "idle", className)}
+    <LosoMark
+      working={status.busy}
+      size={size}
+      className={cx(!status.busy && !status.question && !status.unread && "opacity-70", className)}
     />
   );
 }
@@ -224,7 +270,7 @@ export function ChatDock({
         aria-label="Loso chat"
         hidden={state === "closed"}
         className={cx(
-          "absolute z-30 flex border border-line-strong bg-black shadow-[0_30px_80px_-20px_rgba(0,0,0,0.95),0_0_0_1px_rgba(0,0,0,0.6)]",
+          "absolute z-30 flex border border-line-strong bg-ground shadow-[0_30px_80px_-20px_var(--color-shade)]",
           state === "closed" && "hidden"
         )}
         style={{
@@ -293,7 +339,7 @@ export function ChatDock({
           onClick={() => go("open")}
           aria-expanded={false}
           aria-controls="loso-chat"
-          className="absolute bottom-[52px] right-4 z-30 flex h-11 max-w-[320px] items-center gap-2.5 rounded-full border border-edge bg-black/95 pl-4 pr-5 text-[14px] text-ink shadow-[0_20px_50px_-15px_rgba(0,0,0,0.9)] transition-colors hover:border-lime"
+          className="absolute bottom-[52px] right-4 z-30 flex h-11 max-w-[320px] items-center gap-2.5 rounded-full border border-edge bg-ground/95 pl-4 pr-5 text-[14px] text-ink shadow-[0_20px_50px_-15px_var(--color-shade)] transition-colors hover:border-lime"
         >
           <Orb status={status} />
           <span className="truncate">{pillLabel(status)}</span>

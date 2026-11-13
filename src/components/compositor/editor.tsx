@@ -18,7 +18,6 @@ import {
   FolderOpen,
   History as HistoryIcon,
   Image as ImageIcon,
-  Loader2,
   Music,
   PanelLeft,
   Plus,
@@ -33,22 +32,26 @@ import { Button, InlineError, Select, cx } from "@/components/ui";
 import { FontLoader } from "@/components/font-loader";
 import { EditableTitle, NarrowScreenNote, SaveStatus, type SaveState } from "@/components/editor-chrome";
 import { ChatPanel, STARTERS, type ChatControl } from "@/components/agent/chat-panel";
-import { LocalChat } from "@/components/agent/local-chat";
 import { ChatDock, IDLE_STATUS, dockSafeArea, useAnnouncer, useDockState, type DockStatus } from "@/components/agent/chat-dock";
 import { TemplatesSection } from "@/components/compositor/templates-section";
 import { FolderTray } from "@/components/compositor/folder-tray";
 import { VersionsPanel } from "@/components/compositor/versions-panel";
+import { VideoReady } from "@/components/compositor/video-ready";
 import { DropOverlay, useWindowFileDrag } from "@/components/compositor/drop-overlay";
 import { PointAtIt, PointAtItButton } from "@/components/compositor/point-at-it";
+import { ThemeToggle } from "@/components/theme-toggle";
 import { useLosoInbox } from "@/components/compositor/loso-inbox";
 import { useSettingsMode, useSettingsSheet } from "@/components/settings/settings-sheet";
-import { clock, historyReducer, initialHistory, timeline, type DocUpdater } from "@/components/compositor/history";
+import { clock, historyReducer, initialHistory, sameDoc, timeline, type DocUpdater } from "@/components/compositor/history";
+import { loadVersions, saveVersions } from "@/lib/local/versions";
+import { setFaviconWorking } from "@/lib/favicon";
 import type { EditorBackend } from "@/components/compositor/backend";
 import { WordsOnScreen } from "@/components/compositor/words-on-screen";
 import { WordsIcon, WordsPiecesRow, WordsStoryRow } from "@/components/compositor/words-strip";
 import { isCaption, styleAll } from "@/lib/caption-set";
 import { CompositorComposition } from "@/remotion/compositor";
-import { FONT_CHOICES } from "@/lib/brand";
+import { LosoLogo, LosoMark } from "@/components/logo";
+import { FONT_CHOICES } from "@/lib/fonts";
 import {
   OUTPUT_PRESETS,
   compositorDocSchema,
@@ -221,6 +224,11 @@ export function CompositorEditor({ backend }: { backend: EditorBackend }) {
   const [agentBusy, setAgentBusy] = useState(false);
   const [dockStatus, setDockStatus] = useState<DockStatus>(IDLE_STATUS);
   const [versionsOpen, setVersionsOpen] = useState(false);
+  // "Done." — the finished video, shown once right after it's made.
+  const [ready, setReady] = useState<{ url: string; savedAs: string | null } | null>(null);
+  const makeBtnRef = useRef<HTMLButtonElement>(null);
+  // While marking, the frame moves down below the Point-at-it toolbar.
+  const [markBarH, setMarkBarH] = useState(0);
   const [previewIndex, setPreviewIndex] = useState<number | null>(null);
   const [railOpen, setRailOpenRaw] = useState(true);
   const [storyOpen, setStoryOpenRaw] = useState(false);
@@ -231,6 +239,9 @@ export function CompositorEditor({ backend }: { backend: EditorBackend }) {
   // updatedAt of the newest saved copy we know about (ours or adopted)
   const lastSeen = useRef(backend.updatedAt);
   const dock = useDockState(backend.projectId);
+  // In a narrow window an open chat and the pieces rail don't both fit
+  // beside the video: the chat wins while it's open.
+  const railShown = railOpen && !(dock.narrow && dock.state === "open");
   const { message: announcement, announce } = useAnnouncer();
   const chat = useRef<ChatControl | null>(null);
   const dragTypes = useWindowFileDrag();
@@ -326,6 +337,40 @@ export function CompositorEditor({ backend }: { backend: EditorBackend }) {
       flush(true);
     };
   }, [flush]);
+
+  // ---- versions survive a reload ----
+  // The history is kept per project in IndexedDB (docs + labels, at most 100).
+  // On open the saved versions are put back behind the opened video; after
+  // that every change is written a moment later, and right away on leaving.
+  const histRef = useRef(hist);
+  histRef.current = hist;
+  const versionsReady = useRef(false);
+  useEffect(() => {
+    let cancelled = false;
+    loadVersions(backend.kind, backend.projectId).then((saved) => {
+      if (cancelled) return;
+      if (saved) dispatch({ type: "hydrate", saved });
+      versionsReady.current = true;
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [backend.kind, backend.projectId]);
+  useEffect(() => {
+    if (!versionsReady.current) return;
+    const t = setTimeout(() => saveVersions(backend.kind, backend.projectId, hist), 600);
+    return () => clearTimeout(t);
+  }, [hist, backend.kind, backend.projectId]);
+  useEffect(() => {
+    const save = () => {
+      if (versionsReady.current) saveVersions(backend.kind, backend.projectId, histRef.current);
+    };
+    window.addEventListener("pagehide", save);
+    return () => {
+      window.removeEventListener("pagehide", save);
+      save();
+    };
+  }, [backend.kind, backend.projectId]);
 
   // ---- measure the stage's safe area for scaling ----
   // The dock floats over the stage (no reflow); the frame centres in the
@@ -456,7 +501,7 @@ export function CompositorEditor({ backend }: { backend: EditorBackend }) {
   const adoptExternal = useCallback((next: CompositorDoc, group: string, label?: string) => {
     const parsed = compositorDocSchema.safeParse(next);
     if (!parsed.success) return;
-    if (JSON.stringify(parsed.data) === JSON.stringify(docRef.current)) return;
+    if (sameDoc(parsed.data, docRef.current)) return;
     dispatch({ type: "external", doc: parsed.data, group, label });
   }, []);
 
@@ -768,6 +813,20 @@ export function CompositorEditor({ backend }: { backend: EditorBackend }) {
     return () => clearInterval(t);
   }, [rendering]);
 
+  // The tab icon spins with the Onion Skin while Loso works: an agent turn
+  // running, or the video being made. Every true gets its matching false.
+  const agentWorking = dockStatus.busy || agentBusy;
+  useEffect(() => {
+    if (!agentWorking) return;
+    setFaviconWorking(true);
+    return () => setFaviconWorking(false);
+  }, [agentWorking]);
+  useEffect(() => {
+    if (!rendering) return;
+    setFaviconWorking(true);
+    return () => setFaviconWorking(false);
+  }, [rendering]);
+
   // Announce export progress in 25% steps only.
   const lastQuarter = useRef(-1);
   useEffect(() => {
@@ -777,7 +836,7 @@ export function CompositorEditor({ backend }: { backend: EditorBackend }) {
     lastQuarter.current = q;
   }, [renderProgress, announce]);
 
-  async function exportVideo() {
+  async function exportVideo(): Promise<{ savedAs?: string; error?: string }> {
     setError(null);
     setRendering(true);
     lastQuarter.current = -1;
@@ -790,15 +849,34 @@ export function CompositorEditor({ backend }: { backend: EditorBackend }) {
       setRenderUrl(d.url);
       setSavedAs(d.savedAs ?? null);
       setRenderedDoc(exported);
-      announce(`Your video is ready.${d.savedAs ? ` It's saved in your folder as ${d.savedAs}.` : ""}`);
+      setReady({ url: d.url, savedAs: d.savedAs ?? null });
+      announce(`Done. Your video is ready.${d.savedAs ? ` It's saved in your folder as ${d.savedAs}.` : ""}`);
+      return { savedAs: d.savedAs ?? undefined };
     } catch (e) {
       setError((e as Error).message);
+      return { error: (e as Error).message };
     } finally {
       setRendering(false);
       setRenderProgress(null);
     }
   }
   const renderStale = !!renderUrl && renderedDoc !== doc;
+
+  // The in-browser agent makes the video with the same button (render_video, after the user confirms).
+  const exportRef = useRef(exportVideo);
+  exportRef.current = exportVideo;
+  const chatApi = useMemo(
+    () =>
+      backend.chat?.({
+        getDoc: () => docRef.current,
+        async render() {
+          const r = await exportRef.current();
+          if (r.error) throw new Error(r.error);
+          return r.savedAs ?? "a new video in exports/";
+        },
+      }),
+    [backend]
+  );
 
   const sortedLayers = [...layers].sort((a, b) => b.z - a.z); // top layer first in the list
   const durationSec = output.durationInFrames / output.fps;
@@ -854,42 +932,52 @@ export function CompositorEditor({ backend }: { backend: EditorBackend }) {
           if (dock.state !== "open") dock.setState("open");
           setTimeout(focusChat, 30);
         }}
-        className="sr-only focus:not-sr-only focus:fixed focus:left-3 focus:top-3 focus:z-[200] focus:bg-lime focus:px-3 focus:py-2 focus:text-[13px] focus:text-black"
+        className="sr-only focus:not-sr-only focus:fixed focus:left-3 focus:top-3 focus:z-[200] focus:bg-lime-fill focus:px-3 focus:py-2 focus:text-[13px] focus:text-black"
       >
         Skip to Loso chat
       </a>
 
-      {/* ---- the editor bar: one 52px line ---- */}
-      <header className="flex h-[52px] shrink-0 items-center gap-3 border-b border-line pl-4 pr-3">
+      {/* ---- the editor bar: one 52px line ----
+          Never wraps: below 1280px the labels fold into icons (each keeps
+          its name for screen readers and a tooltip), below 1024px Undo and
+          Redo move into Versions, and the title truncates. */}
+      <header className="flex h-[52px] shrink-0 items-center gap-1.5 whitespace-nowrap border-b border-line pl-3 pr-3 lg:gap-3 lg:pl-4">
         <Link
           href="/"
           aria-label="Loso: all your videos"
           title="All your videos"
-          className="flex h-10 items-center gap-1.5 pr-1 text-ink-dim transition-colors hover:text-lime"
+          className="flex h-10 shrink-0 items-center gap-1.5 pr-1 text-ink-dim transition-colors hover:text-lime"
         >
           <ArrowLeft size={14} aria-hidden />
-          <span className="font-serif text-[21px] italic leading-none tracking-tight text-ink">Loso</span>
+          <LosoLogo size={20} className="text-ink max-lg:[&>span:last-child]:hidden" />
         </Link>
-        <span className="h-5 w-px bg-line-strong" aria-hidden />
+        <span className="h-5 w-px shrink-0 bg-line-strong" aria-hidden />
         <button
           type="button"
-          onClick={() => setRailOpen(!railOpen)}
-          aria-pressed={railOpen}
+          onClick={() => {
+            const next = !railOpen;
+            setRailOpen(next);
+            // In a narrow window the pieces and the open chat don't both fit beside the video.
+            if (next && dock.narrow && dock.state === "open") dock.setState("peek");
+          }}
+          aria-pressed={railShown}
           aria-controls="pieces-rail"
-          title={railOpen ? "Hide the pieces" : "Show the pieces"}
+          title={railShown ? "Hide the pieces" : "Show the pieces"}
           aria-label="Pieces panel"
-          className={cx("flex h-10 w-10 items-center justify-center transition-colors", railOpen ? "text-ink" : "text-ink-dim hover:text-ink")}
+          className={cx("flex h-10 w-10 shrink-0 items-center justify-center transition-colors", railShown ? "text-ink" : "text-ink-dim hover:text-ink")}
         >
           <PanelLeft size={16} />
         </button>
-        <EditableTitle
-          value={title}
-          onSave={async (next) => {
-            setTitle(next);
-            await backend.rename(next).catch(() => setError("Couldn't rename the video."));
-          }}
-        />
-        <span className="hidden min-w-0 items-center gap-1.5 text-[12.5px] text-ink-dim lg:flex">
+        <div className="flex min-w-[8ch] max-w-[420px] shrink items-center">
+          <EditableTitle
+            value={title}
+            onSave={async (next) => {
+              setTitle(next);
+              await backend.rename(next).catch(() => setError("Couldn't rename the video."));
+            }}
+          />
+        </div>
+        <span className="hidden min-w-0 shrink items-center gap-1.5 text-[12.5px] text-ink-dim min-[1400px]:flex">
           {backend.folder ? (
             <>
               <span className="shrink-0">saved in</span>
@@ -897,7 +985,7 @@ export function CompositorEditor({ backend }: { backend: EditorBackend }) {
               <span className="max-w-[160px] truncate text-ink">{backend.folder.name}</span>
             </>
           ) : (
-            <span>on this computer</span>
+            <span>{backend.kind === "server" ? "saved by Loso" : "on this computer"}</span>
           )}
         </span>
         <SaveStatus
@@ -907,16 +995,17 @@ export function CompositorEditor({ backend }: { backend: EditorBackend }) {
             flush();
           }}
         />
-        <div className="flex-1" />
+        <div className="min-w-0 flex-1" />
 
-        <div className="flex items-center">
+        <div className="hidden shrink-0 items-center lg:flex">
           <button
             onClick={undo}
             disabled={!canUndo || agentBusy}
             title="Undo (⌘Z)"
+            aria-label="Undo"
             className="flex h-10 items-center gap-1.5 px-2.5 text-[13.5px] text-ink transition-colors hover:text-lime disabled:text-ink-faint"
           >
-            <Undo2 size={15} aria-hidden /> Undo
+            <Undo2 size={15} aria-hidden /> <span className="hidden xl:inline">Undo</span>
           </button>
           <button
             onClick={redo}
@@ -933,15 +1022,18 @@ export function CompositorEditor({ backend }: { backend: EditorBackend }) {
           type="button"
           aria-expanded={versionsOpen}
           aria-haspopup="dialog"
+          aria-label={`Versions, ${versions.length}`}
           onClick={() => setVersionsOpen((v) => !v)}
-          title={lastStep ? `Last change: ${lastStep.meta.label} · ${clock(lastStep.meta.at)}` : undefined}
+          title={lastStep ? `Versions · last change: ${lastStep.meta.label} · ${clock(lastStep.meta.at)}` : "Versions"}
           className={cx(
-            "flex h-10 items-center gap-1.5 px-2.5 text-[13.5px] transition-colors",
+            "flex h-10 shrink-0 items-center gap-1.5 px-2 text-[13.5px] transition-colors xl:px-2.5",
             versionsOpen ? "text-lime" : "text-ink hover:text-lime"
           )}
         >
-          <HistoryIcon size={15} aria-hidden /> Versions
-          <span className="font-mono text-[12px] text-ink-dim">{versions.length}</span>
+          <HistoryIcon size={15} aria-hidden /> <span className="hidden xl:inline">Versions</span>
+          <span className="font-mono text-[12px] text-ink-dim" aria-hidden>
+            {versions.length}
+          </span>
         </button>
         <PointAtItButton
           active={inbox.marking}
@@ -956,61 +1048,81 @@ export function CompositorEditor({ backend }: { backend: EditorBackend }) {
                   : null
           }
         />
+        <ThemeToggle accentHover />
         <button
           type="button"
           aria-haspopup="dialog"
           aria-label="Settings"
           title="Settings and your AI key (⌘ ,)"
           onClick={(e) => settings.open({ opener: e.currentTarget })}
-          className="flex h-10 w-10 items-center justify-center text-ink-dim transition-colors hover:text-lime"
+          className="flex h-10 w-10 shrink-0 items-center justify-center text-ink-dim transition-colors hover:text-lime"
         >
           <Settings2 size={16} aria-hidden />
         </button>
-        <span className="mx-1 h-5 w-px bg-line-strong" aria-hidden />
+        <span className="mx-1 h-5 w-px shrink-0 bg-line-strong" aria-hidden />
         {renderUrl && !rendering && (
           <a
             href={renderUrl}
             download={`${safeFileName(title)}.mp4`}
+            aria-label={renderStale ? "Download old version" : "Download"}
             title={
               renderStale
                 ? "This copy is from before your latest changes"
                 : savedAs
                   ? `Already saved in your folder as ${savedAs}. This saves one more copy.`
-                  : undefined
+                  : "Download the video"
             }
             className={cx(
-              "flex h-10 items-center gap-1.5 px-2 text-[13px] transition-colors hover:text-lime",
+              "flex h-10 shrink-0 items-center gap-1.5 px-2 text-[13px] transition-colors hover:text-lime",
               renderStale ? "text-ink-dim" : "text-ink"
             )}
           >
-            <Download size={14} aria-hidden /> {renderStale ? "Download old version" : "Download"}
+            <Download size={14} aria-hidden />
+            <span className="hidden xl:inline">{renderStale ? "Download old version" : "Download"}</span>
           </a>
         )}
-        {rendering && <span className="hidden text-[12.5px] text-ink-dim xl:inline">Keep this tab open</span>}
         <Button
-          onClick={exportVideo}
-          disabled={rendering || layers.length === 0}
+          ref={makeBtnRef}
+          // Busy isn't "unavailable": no dimmed lime while making (it read
+          // poorly on paper). The button stays readable and simply waits.
+          variant={rendering ? "outline" : "primary"}
+          onClick={() => {
+            if (!rendering) exportVideo();
+          }}
+          disabled={!rendering && layers.length === 0}
+          aria-disabled={rendering || undefined}
+          aria-busy={rendering || undefined}
           title={
             layers.length === 0
               ? "Add something to your video first"
-              : renderUrl && renderStale
-                ? "You've changed things since you last made it. This makes a new MP4 with your changes."
-                : undefined
+              : rendering
+                ? "Keep this tab open while Loso makes your video"
+                : renderUrl && renderStale
+                  ? "You've changed things since you last made it. This makes a new video with your changes."
+                  : undefined
           }
+          className={cx("shrink-0", rendering && "pointer-events-none")}
         >
-          {rendering && <Loader2 size={14} className="animate-spin" aria-hidden />}
-          {rendering
-            ? renderProgress !== null
-              ? `Making… ${Math.round(renderProgress * 100)}%`
-              : `Making… ${renderElapsed}s`
-            : renderUrl && renderStale
-              ? "Update the video"
-              : "Make the video"}
+          {rendering && <LosoMark working size={18} />}
+          {rendering ? (
+            <span className="min-w-[8.5ch] text-left tabular-nums">
+              {renderProgress !== null ? `Making… ${Math.round(renderProgress * 100)}%` : `Making… ${renderElapsed}s`}
+            </span>
+          ) : renderUrl && renderStale ? (
+            "Update the video"
+          ) : (
+            "Make the video"
+          )}
         </Button>
       </header>
+      {rendering && (
+        <p className="pointer-events-none absolute right-3 top-[58px] z-40 border border-line-strong bg-ground px-3 py-1.5 text-[12.5px] text-ink-dim shadow-[0_12px_30px_-12px_var(--color-shade)]">
+          Keep this tab open while Loso makes your video.
+        </p>
+      )}
 
       {error && (
-        <div className="flex shrink-0 items-start gap-3 border-b border-danger/40 bg-black px-5 py-2.5">
+        <div className="flex shrink-0 items-start gap-3 border-b border-danger/40 bg-ground px-5 py-2.5">
           <InlineError onDismiss={() => setError(null)} className="flex-1">
             {error}
           </InlineError>
@@ -1019,7 +1131,7 @@ export function CompositorEditor({ backend }: { backend: EditorBackend }) {
 
       <div className="relative flex min-h-0 flex-1">
         {/* ---- pieces rail ---- */}
-        {railOpen && (
+        {railShown && (
           <aside
             id="pieces-rail"
             ref={railRef}
@@ -1244,16 +1356,25 @@ export function CompositorEditor({ backend }: { backend: EditorBackend }) {
           aria-label="Preview of your video"
           className="relative flex min-w-0 flex-1 flex-col bg-void"
         >
-          <div className="relative min-h-0 flex-1" onPointerDown={() => setSelectedId(null)}>
+          {/* With footage on it the well goes dark in both themes (a lightbox:
+              paper around a video skews how its colours read). Empty, it stays
+              the page colour so the invitation reads like the rest of Loso. */}
+          <div
+            className={cx(
+              "relative min-h-0 flex-1 transition-colors duration-300",
+              (layers.length > 0 || previewing) && "bg-stage"
+            )}
+            onPointerDown={() => setSelectedId(null)}
+          >
             {/* the safe area: everything left of the floating dock */}
             <div
               ref={stageRef}
-              className="absolute bottom-7 left-8 top-7 flex items-center justify-center"
-              style={{ right: safeRight + 32 }}
+              className="absolute bottom-7 left-8 flex items-center justify-center"
+              style={{ right: safeRight + 32, top: inbox.marking && markBarH ? markBarH + 20 : 28 }}
             >
               {dispW > 0 && (layers.length > 0 || previewing) && (
                 <div
-                  className="relative shrink-0 shadow-[0_30px_90px_-30px_rgba(0,0,0,0.9)]"
+                  className="theme-dark relative shrink-0 shadow-[0_30px_90px_-30px_rgba(0,0,0,0.9)]"
                   style={{ width: dispW, height: dispH }}
                   onPointerDown={(e) => e.stopPropagation()}
                 >
@@ -1288,7 +1409,7 @@ export function CompositorEditor({ backend }: { backend: EditorBackend }) {
                           className="pointer-events-none absolute z-10 border border-lime motion-safe:transition-opacity"
                           style={{ left: l.x * fit, top: l.y * fit, width: l.width * fit, height: l.height * fit }}
                         >
-                          <span className="absolute -top-[22px] left-0 whitespace-nowrap bg-lime px-1.5 py-0.5 text-[11.5px] font-medium text-black">
+                          <span className="absolute -top-[22px] left-0 whitespace-nowrap bg-lime-fill px-1.5 py-0.5 text-[11.5px] font-medium text-black">
                             Loso: {layerLabel(l).slice(0, 24)}
                           </span>
                         </div>
@@ -1305,6 +1426,7 @@ export function CompositorEditor({ backend }: { backend: EditorBackend }) {
                       selected={selected}
                       barHost={stageSectionRef.current}
                       barRight={safeRight}
+                      onBarHeight={setMarkBarH}
                       agent={backend.agent}
                       onCancel={inbox.stopMarking}
                       onSend={inbox.onMarked}
@@ -1351,27 +1473,42 @@ export function CompositorEditor({ backend }: { backend: EditorBackend }) {
                 </div>
               )}
 
-              {/* empty video: the stage becomes the invitation */}
+              {/* empty video: the stage becomes the invitation. The starter
+                  prompts live in one place: in the chat while it's open, here
+                  while it's folded away. */}
               {layers.length === 0 && !previewing && (
                 <div className="absolute inset-0 z-20 flex items-center justify-center p-6" onPointerDown={(e) => e.stopPropagation()}>
                   <div className="flex max-w-[440px] flex-col gap-5">
-                    <p className="font-serif text-[clamp(30px,3.4vw,44px)] font-light italic leading-[1.05] tracking-tight text-ink">
-                      What are we making?
-                    </p>
-                    <ul className="flex flex-col border-t border-line">
-                      {STARTERS.map((s) => (
-                        <li key={s} className="border-b border-line">
-                          <button
-                            type="button"
-                            onClick={() => askLoso(s)}
-                            className="group flex min-h-11 w-full items-center gap-3 py-2 text-left font-serif text-[17px] italic text-ink-dim transition-colors hover:text-ink"
-                          >
-                            <span className="flex-1">“{s}”</span>
-                            <span className="text-[12px] not-italic text-ink-faint transition-colors group-hover:text-lime">Ask Loso →</span>
-                          </button>
-                        </li>
-                      ))}
-                    </ul>
+                    {dock.state === "open" && backend.agent ? (
+                      <>
+                        <p className="font-serif text-[clamp(30px,3.4vw,44px)] font-light italic leading-[1.05] tracking-tight text-ink">
+                          Start with your clips.
+                        </p>
+                        <p className="text-[14.5px] leading-relaxed text-ink-dim">
+                          Add the videos, pictures and sounds for this one, then tell Loso what to make in the chat.
+                        </p>
+                      </>
+                    ) : (
+                      <>
+                        <p className="font-serif text-[clamp(30px,3.4vw,44px)] font-light italic leading-[1.05] tracking-tight text-ink">
+                          What are we making?
+                        </p>
+                        <ul className="flex flex-col border-t border-line">
+                          {STARTERS.map((s) => (
+                            <li key={s} className="border-b border-line">
+                              <button
+                                type="button"
+                                onClick={() => askLoso(s)}
+                                className="group flex min-h-11 w-full items-center gap-3 py-2 text-left font-serif text-[17px] italic text-ink-dim transition-colors hover:text-ink"
+                              >
+                                <span className="flex-1">“{s}”</span>
+                                <span className="text-[12px] not-italic text-ink-faint transition-colors group-hover:text-lime">Ask Loso →</span>
+                              </button>
+                            </li>
+                          ))}
+                        </ul>
+                      </>
+                    )}
                     <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-[13.5px] text-ink-dim">
                       <Button size="sm" variant="outline" onClick={pickFiles}>
                         <Plus size={14} aria-hidden /> Add files
@@ -1390,7 +1527,7 @@ export function CompositorEditor({ backend }: { backend: EditorBackend }) {
                 style={{ right: safeRight }}
               >
                 {previewing && preview ? (
-                  <div className="pointer-events-auto flex items-center gap-3 border border-lime/60 bg-black/95 py-1.5 pl-4 pr-1.5 text-[13px] text-ink">
+                  <div className="pointer-events-auto flex items-center gap-3 border border-lime/60 bg-ground/95 py-1.5 pl-4 pr-1.5 text-[13px] text-ink">
                     Looking at an earlier version · {clock(preview.meta.at)}
                     <Button
                       size="sm"
@@ -1404,8 +1541,8 @@ export function CompositorEditor({ backend }: { backend: EditorBackend }) {
                     </Button>
                   </div>
                 ) : (
-                  <div className="pointer-events-auto flex items-center gap-3 border border-lime/50 bg-black/95 py-1 pl-4 pr-1 text-[13px] text-ink">
-                    <span className="orb working" aria-hidden />
+                  <div className="pointer-events-auto flex items-center gap-3 border border-lime/50 bg-ground/95 py-1 pl-4 pr-1 text-[13px] text-ink">
+                    <LosoMark working size={18} />
                     <span className="max-w-[340px] truncate">Loso is working · {dockStatus.phase ?? "thinking"}</span>
                     {backend.agent && (
                       <button
@@ -1470,7 +1607,7 @@ export function CompositorEditor({ backend }: { backend: EditorBackend }) {
                         <span
                           className={cx(
                             "absolute top-0 flex h-full min-w-0 items-center gap-1 overflow-hidden px-1.5 text-[11.5px]",
-                            on ? "bg-lime text-black" : agentFocus.includes(l.id) ? "bg-lime/40 text-ink" : "bg-line-strong text-ink"
+                            on ? "bg-lime-fill text-black" : agentFocus.includes(l.id) ? "bg-lime-fill/40 text-ink" : "bg-line-strong text-ink"
                           )}
                           style={{ left: `${left}%`, width: `${Math.max(2, w)}%` }}
                         >
@@ -1498,6 +1635,7 @@ export function CompositorEditor({ backend }: { backend: EditorBackend }) {
           {(controls) =>
             backend.agent ? (
               <ChatPanel
+                api={chatApi}
                 projectId={backend.projectId}
                 onDoc={onAgentDoc}
                 onBusyChange={onAgentBusy}
@@ -1511,12 +1649,24 @@ export function CompositorEditor({ backend }: { backend: EditorBackend }) {
                 dockOpen={dock.state === "open"}
                 onPutInVideo={inbox.putInVideo}
               />
-            ) : (
-              <LocalChat projectId={backend.projectId} dockControls={controls} controlRef={chat} />
-            )
+            ) : null
           }
         </ChatDock>
 
+        {ready && (
+          <VideoReady
+            url={ready.url}
+            fileName={`${safeFileName(title)}.mp4`}
+            savedAs={ready.savedAs}
+            folderName={backend.folder?.name}
+            aspect={output.width / output.height}
+            right={safeRight}
+            onClose={() => {
+              setReady(null);
+              requestAnimationFrame(() => makeBtnRef.current?.focus());
+            }}
+          />
+        )}
         {versionsOpen && (
           <VersionsPanel
             hist={hist}
@@ -1665,7 +1815,7 @@ function Inspector({
               rows={3}
               value={selected.text}
               onChange={(e) => patchLayer(selected.id, { text: e.target.value })}
-              className="w-full resize-none border border-edge/70 bg-black px-3 py-2 text-[14px] text-ink outline-none focus:border-lime/70"
+              className="w-full resize-none border border-edge/70 bg-ground px-3 py-2 text-[14px] text-ink outline-none focus:border-lime/70"
             />
           </label>
           <label className="flex flex-col gap-1">

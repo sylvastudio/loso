@@ -26,8 +26,8 @@ export interface AiConfig {
   /** Capabilities, from the Settings "Test" button (user can override). */
   vision: boolean;
   tools: boolean;
-  /** Transcription: "provider" uses the preset's STT when it has word timings. */
-  transcription: "provider" | "local" | "groq";
+  /** Transcription: "provider" uses the preset's STT when it has word timings, else local Whisper. */
+  transcription: "provider" | "local";
 }
 
 export interface ImagePart {

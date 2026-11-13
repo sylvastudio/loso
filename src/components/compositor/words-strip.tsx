@@ -46,7 +46,7 @@ export function WordsStoryRow({
               onClick={() => onOpen(c.id)}
               className={cx(
                 "absolute top-0 flex h-full min-w-0 items-center overflow-hidden border-l px-1 text-left text-[11.5px] leading-none transition-colors",
-                on ? "border-black bg-lime text-black" : "border-lime/70 text-ink hover:bg-line-strong",
+                on ? "border-black bg-lime-fill text-black" : "border-lime/70 text-ink hover:bg-line-strong",
               )}
               style={{ left: `${left}%`, width: `${Math.max(0.6, w)}%` }}
             >

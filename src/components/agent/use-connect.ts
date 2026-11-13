@@ -63,7 +63,7 @@ export function useConnectFlow(payload: ConfigPayload, opts: { initialPreset?: s
   const [failure, setFailure] = useState<string | null>(opts.notice ?? null);
   const loadSeq = useRef(0);
 
-  // A key we can use without the user pasting one: saved for this preset, or shared from API Keys.
+  // A key we can use without the user pasting one: saved for this preset, or kept from an earlier switch.
   const existingKey =
     preset && config?.preset === preset.id && config.hasKey
       ? { masked: config.maskedKey, shared: config.keySource === "shared" }

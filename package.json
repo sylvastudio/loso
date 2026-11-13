@@ -8,8 +8,9 @@
     ]
   },
   "scripts": {
-    "dev": "next dev",
-    "build": "next build",
+    "dev": "next dev -H 127.0.0.1",
+    "build": "node scripts/build-static.mjs",
+    "postinstall": "node scripts/copy-ort.mjs",
     "start": "next start",
     "mcp": "node mcp/loso-mcp.mjs"
   },
@@ -23,7 +24,7 @@
     "better-sqlite3": "^12.2.0",
     "lucide-react": "^0.525.0",
     "mediabunny": "1.50.8",
-    "next": "^15.4.4",
+    "next": "^15.5.29",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
     "remotion": "4.0.498",

@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { storeAsset } from "@/lib/assets";
+import { isStorableMime, storeAsset } from "@/lib/assets";
 
 export const dynamic = "force-dynamic";
 
@@ -14,6 +14,9 @@ export async function POST(req: Request) {
   }
   if (file.size > MAX_BYTES) {
     return NextResponse.json({ error: "File too large (max 200 MB)" }, { status: 413 });
+  }
+  if (!isStorableMime(file.type)) {
+    return NextResponse.json({ error: "Only videos, pictures (PNG, JPG, WebP, GIF) and sound files can be added." }, { status: 415 });
   }
   const buffer = Buffer.from(await file.arrayBuffer());
   const meta = storeAsset(buffer, file.type || "application/octet-stream", file.name, kind);

@@ -5,9 +5,10 @@ import { Redo2, Undo2, X } from "lucide-react";
 import { Button, cx } from "@/components/ui";
 import { clock, timeline, type History } from "./history";
 
-// Versions: every change this visit, newest first, in plain words. Pointing
-// at one previews it on the stage; "Go back to this" adds it again as the
-// newest version, so nothing is ever thrown away.
+// Versions: every change, newest first, in plain words. They're kept on this
+// computer per project (the last 100), so they survive a reload. Pointing at
+// one previews it on the stage; "Go back to this" adds it again as the newest
+// version, so nothing is ever thrown away.
 
 const BY: Record<string, string> = { you: "You", loso: "Loso", start: "Starting point", outside: "Another window", open: "" };
 
@@ -54,7 +55,7 @@ export function VersionsPanel({
       ref={ref}
       role="dialog"
       aria-label="Versions"
-      className="absolute right-3 top-3 z-50 flex max-h-[calc(100%-24px)] w-[340px] flex-col border border-line-strong bg-black shadow-[0_30px_80px_-20px_rgba(0,0,0,1)]"
+      className="absolute right-3 top-3 z-50 flex max-h-[calc(100%-24px)] w-[340px] flex-col border border-line-strong bg-ground shadow-[0_30px_80px_-20px_var(--color-shade)]"
       style={{ borderRadius: 2 }}
     >
       <div className="flex items-start gap-3 border-b border-line px-4 pb-3 pt-3.5">
@@ -150,7 +151,9 @@ export function VersionsPanel({
             Go back to this ({clock(target.meta.at)})
           </Button>
         ) : (
-          <p className="text-center text-[12.5px] text-ink-dim">Pick a version above to look at it.</p>
+          <p className="text-center text-[12.5px] text-ink-dim">
+            {all.length === 1 ? "This is where you started." : "Pick a version above to look at it."}
+          </p>
         )}
       </div>
     </div>

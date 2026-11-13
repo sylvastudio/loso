@@ -10,7 +10,12 @@ type Ctx = { params: Promise<{ id: string }> };
 
 export async function GET(req: Request, { params }: Ctx) {
   const { id } = await params;
-  const filePath = renderPath(id);
+  let filePath: string;
+  try {
+    filePath = renderPath(id);
+  } catch {
+    return NextResponse.json({ error: "Not found" }, { status: 404 });
+  }
   if (!fs.existsSync(filePath)) {
     return NextResponse.json({ error: "Not rendered yet" }, { status: 404 });
   }

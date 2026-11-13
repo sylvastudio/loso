@@ -26,12 +26,31 @@ export interface Clip {
   hasAudio: boolean;
 }
 
-export function resolveFolder(folder: string): string {
-  const expanded = folder.startsWith("~") ? path.join(os.homedir(), folder.slice(1)) : folder;
-  const abs = path.resolve(expanded);
-  if (!fs.existsSync(abs) || !fs.statSync(abs).isDirectory()) {
-    throw new Error(`Folder not found: ${folder}`);
+/**
+ * A path the agent may read: inside the home folder or an external drive
+ * (/Volumes), symlinks resolved, and never a hidden folder (~/.ssh, ~/.config, …).
+ * Footage paths can come from the model, so they are treated as untrusted.
+ */
+export function userPath(p: string): string {
+  const expanded = p.startsWith("~") ? path.join(os.homedir(), p.slice(1)) : p;
+  let real: string;
+  try {
+    real = fs.realpathSync(path.resolve(expanded));
+  } catch {
+    throw new Error(`Not found: ${p}`);
   }
+  const roots = [fs.realpathSync(os.homedir()), "/Volumes"];
+  const root = roots.find((r) => real === r || real.startsWith(r + path.sep));
+  if (!root) throw new Error(`Loso can only use files in your home folder or on an external drive: ${p}`);
+  if (path.relative(root, real).split(path.sep).some((seg) => seg.startsWith("."))) {
+    throw new Error(`Loso doesn't read hidden folders: ${p}`);
+  }
+  return real;
+}
+
+export function resolveFolder(folder: string): string {
+  const abs = userPath(folder);
+  if (!fs.statSync(abs).isDirectory()) throw new Error(`Folder not found: ${folder}`);
   return abs;
 }
 

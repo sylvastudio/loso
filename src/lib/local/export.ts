@@ -2,17 +2,13 @@
 // the Player previews is rendered frame by frame in this tab and encoded with
 // WebCodecs. No server, no headless Chromium.
 
-import { canRenderMediaOnWeb, renderMediaOnWeb } from "@remotion/web-renderer";
+import { renderMediaOnWeb } from "@remotion/web-renderer";
 import { CompositorComposition } from "../../remotion/compositor";
 import type { ResolvedCompositorDoc } from "../compositor";
 
 export interface ExportResult {
   blob: Blob;
   ms: number;
-}
-
-export async function checkExport(doc: ResolvedCompositorDoc) {
-  return canRenderMediaOnWeb({ width: doc.output.width, height: doc.output.height });
 }
 
 export async function exportInTab(
@@ -34,7 +30,9 @@ export async function exportInTab(
     inputProps: props,
     onProgress: (p) => onProgress?.(p.progress),
     signal: signal ?? null,
-    isProduction: false,
+    // Remotion counts renders (no content is sent); the public site counts as production.
+    licenseKey: process.env.NEXT_PUBLIC_REMOTION_LICENSE_KEY ?? null,
+    isProduction: process.env.NEXT_PUBLIC_LOSO_STATIC === "1",
   });
   const blob = await getBlob();
   return { blob, ms: performance.now() - t0 };

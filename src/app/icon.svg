@@ -1,4 +1,27 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
-  <rect width="64" height="64" rx="14" fill="#0a0a0b"/>
-  <text x="32" y="45" text-anchor="middle" font-family="Georgia, serif" font-style="italic" font-size="40" fill="#d4f53c">S</text>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" fill="none">
+  <style>
+    .f { animation: adv 2.1s cubic-bezier(.6,0,.3,1) infinite; }
+    .f2 { animation-delay: -.7s; }
+    .f3 { animation-delay: -1.4s; }
+    @keyframes adv {
+      0%, 13% { transform: translate(16px,-16px); opacity: .45; }
+      33%, 46% { transform: translate(8px,-8px); opacity: .7; }
+      66%, 79% { transform: translate(0,0); opacity: 1; }
+      95% { transform: translate(-9px,9px); opacity: 0; }
+      95.1% { transform: translate(24px,-24px); opacity: 0; }
+      100% { transform: translate(16px,-16px); opacity: .45; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .f { animation: none; }
+      .f2 { transform: translate(8px,-8px); opacity: .7; }
+      .f3 { transform: translate(16px,-16px); opacity: .45; }
+    }
+  </style>
+  <rect width="64" height="64" rx="14" fill="#0b0b0c"/>
+  <g stroke="#f2f1ec" stroke-width="5.5">
+    <rect class="f" x="9" y="25" width="30" height="30" rx="6"/>
+    <rect class="f f2" x="9" y="25" width="30" height="30" rx="6"/>
+    <rect class="f f3" x="9" y="25" width="30" height="30" rx="6"/>
+  </g>
+  <circle cx="24" cy="40" r="6" fill="#d4f53c"/>
 </svg>

@@ -38,10 +38,23 @@ export type HistoryAction =
   | { type: "external"; doc: CompositorDoc; group: string; label?: string }
   | { type: "restore"; index: number }
   | { type: "undo" }
-  | { type: "redo" };
+  | { type: "redo" }
+  /** Versions saved on an earlier visit (see lib/local/versions.ts). */
+  | { type: "hydrate"; saved: { past: Step[]; present: CompositorDoc; presentMeta: StepMeta; future: Step[] } };
 
 const COALESCE_MS = 450;
-const HISTORY_LIMIT = 100;
+export const HISTORY_LIMIT = 100;
+
+/** JSON with object keys sorted, so key order (editor vs server vs schema) never counts as a change. */
+function stable(v: unknown): string {
+  return JSON.stringify(v, (_k, x) =>
+    x && typeof x === "object" && !Array.isArray(x)
+      ? Object.fromEntries(Object.keys(x).sort().map((k) => [k, (x as Record<string, unknown>)[k]]))
+      : x
+  );
+}
+
+export const sameDoc = (a: CompositorDoc, b: CompositorDoc) => a === b || stable(a) === stable(b);
 
 export function initialHistory(doc: CompositorDoc): History {
   return { past: [], present: doc, presentMeta: { at: Date.now(), label: "Opened the video", by: "open" }, future: [], ts: 0 };
@@ -68,6 +81,23 @@ function byFromGroup(group: string): StepMeta["by"] {
 
 export function historyReducer(s: History, a: HistoryAction): History {
   switch (a.type) {
+    case "hydrate": {
+      // The saved versions go *before* anything done since opening. If the
+      // video opened exactly as it was saved, the saved history (including
+      // undone versions) picks up where it left off. If it changed meanwhile
+      // (another window, MCP, an edit that didn't reach the history store),
+      // every saved version is kept as an older one and the opened video
+      // stays current.
+      const { saved } = a;
+      const fresh = !s.past.length && !s.future.length;
+      if (sameDoc(saved.present, s.present) && fresh) {
+        return { ...s, past: saved.past.slice(-HISTORY_LIMIT), presentMeta: saved.presentMeta, future: saved.future, ts: 0 };
+      }
+      const older: Step[] = sameDoc(saved.present, s.past[0]?.doc ?? s.present)
+        ? saved.past
+        : [...saved.past, { doc: saved.present, meta: saved.presentMeta }, ...saved.future];
+      return { ...s, past: [...older, ...s.past].slice(-HISTORY_LIMIT) };
+    }
     case "undo": {
       if (!s.past.length) return s;
       const prev = s.past[s.past.length - 1];
@@ -159,7 +189,7 @@ export function pieceName(l: Layer): string {
 
 function changedKeys(a: Layer, b: Layer): string[] {
   const keys = new Set([...Object.keys(a), ...Object.keys(b)]);
-  return [...keys].filter((k) => JSON.stringify((a as Record<string, unknown>)[k]) !== JSON.stringify((b as Record<string, unknown>)[k]));
+  return [...keys].filter((k) => stable((a as Record<string, unknown>)[k]) !== stable((b as Record<string, unknown>)[k]));
 }
 
 function verbFor(keys: string[]): string {
@@ -185,9 +215,9 @@ export function describeChange(prev: CompositorDoc, next: CompositorDoc, by: Ste
   const removed = prev.layers.filter((l) => !after.has(l.id));
   const changed = next.layers.filter((l) => {
     const p = before.get(l.id);
-    return p && JSON.stringify(p) !== JSON.stringify(l);
+    return p && stable(p) !== stable(l);
   });
-  const outputChanged = JSON.stringify(prev.output) !== JSON.stringify(next.output);
+  const outputChanged = stable(prev.output) !== stable(next.output);
 
   const parts: string[] = [];
   if (added.length === 1) parts.push(`Added ${pieceName(added[0])}`);

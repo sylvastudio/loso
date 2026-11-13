@@ -1,5 +1,6 @@
 import type { CompositorDoc } from "@/lib/compositor";
 import type { FolderEntry } from "@/lib/local/folder";
+import type { ChatApi } from "@/components/agent/chat-api";
 
 // Where an open project lives. The editor only talks to this interface:
 // the browser-only app uses the local backend (the user's folder), the dev
@@ -56,4 +57,6 @@ export interface EditorBackend {
   saveNote?(name: string, data: Blob): Promise<string>;
   /** The studio agent runs on this backend. */
   agent: boolean;
+  /** Where the agent runs, if not the dev server: the editor hands it the live doc and the export button. */
+  chat?(env: { getDoc(): CompositorDoc; render(): Promise<string> }): ChatApi;
 }

@@ -1,9 +1,11 @@
 "use client";
 
 import Link from "next/link";
+import { LosoLogo } from "@/components/logo";
 import { usePathname } from "next/navigation";
 import { Settings2 } from "lucide-react";
 import { SettingsSheetProvider, useSettingsSheet } from "@/components/settings/settings-sheet";
+import { ThemeToggle } from "@/components/theme-toggle";
 
 // Editor routes bring their own single 52px bar, so the app header steps
 // aside there (no double header). Everywhere else: a thin masthead.
@@ -28,16 +30,17 @@ function Shell({ children }: { children: React.ReactNode }) {
     <div className="flex h-dvh flex-col overflow-hidden">
       <a
         href="#main"
-        className="sr-only focus:not-sr-only focus:fixed focus:left-3 focus:top-3 focus:z-[200] focus:bg-lime focus:px-3 focus:py-2 focus:text-[13px] focus:text-black"
+        className="sr-only focus:not-sr-only focus:fixed focus:left-3 focus:top-3 focus:z-[200] focus:bg-lime-fill focus:px-3 focus:py-2 focus:text-[13px] focus:text-black"
       >
         Skip to content
       </a>
       {!editor && (
         <header className="flex h-[58px] shrink-0 items-center justify-between border-b border-line px-6">
           <Link href="/" className="flex items-baseline gap-2" aria-label="Loso, your videos">
-            <span className="font-serif text-[24px] italic leading-none tracking-tight">Loso</span>
+            <LosoLogo size={23} />
           </Link>
           <nav aria-label="Main" className="flex items-center gap-6">
+            <ThemeToggle showLabel />
             {pathname.startsWith("/settings") ? (
               <span aria-current="page" className="flex min-h-10 items-center text-[13.5px] text-ink">
                 Settings

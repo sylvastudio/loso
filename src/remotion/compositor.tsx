@@ -13,6 +13,7 @@ import {
 } from "remotion";
 import { Audio as MediaAudio, Video as MediaVideo } from "@remotion/media";
 import type { ResolvedCompositorDoc, ResolvedLayer } from "../lib/compositor";
+import { googleFontsUrl } from "../lib/fonts";
 
 // Entrance animation → extra transform + opacity composed onto a layer's box.
 // Driven by springs so motion settles naturally and stays frame-accurate in
@@ -66,13 +67,11 @@ function useCompositionFonts(families: string[]) {
       }
     };
     const list = Array.from(new Set(families.filter(Boolean)));
-    if (list.length === 0 || typeof document === "undefined") return finish();
-    const q = list
-      .map((f) => `family=${f.replace(/ /g, "+")}:ital,wght@0,400;0,700;1,400;1,700`)
-      .join("&");
+    const href = googleFontsUrl(list, "ital,wght@0,400;0,700;1,400;1,700");
+    if (!href || typeof document === "undefined") return finish();
     const link = document.createElement("link");
     link.rel = "stylesheet";
-    link.href = `https://fonts.googleapis.com/css2?${q}&display=swap`;
+    link.href = href;
     document.head.appendChild(link);
     const waits = list.flatMap((f) => [
       document.fonts.load(`400 16px '${f}'`),

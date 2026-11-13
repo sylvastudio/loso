@@ -13,10 +13,6 @@ export function looksLikeScreenshot(file: File): boolean {
   return SHOT_NAME.test(name);
 }
 
-export function allScreenshots(files: File[]): boolean {
-  return files.length > 0 && files.every(looksLikeScreenshot);
-}
-
 /**
  * During a drag the browser only shows types, not names. Screenshot tools
  * save PNG; camera photos are JPEG / HEIC. So "only PNG pictures" is the best

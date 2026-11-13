@@ -19,8 +19,7 @@ import { AI_CONFIG_CHANGED } from "@/components/agent/use-connect";
 import type { ConfigPayload } from "@/components/agent/connect-card";
 import { AiKeyForm, LocalKeyForm } from "@/components/settings/ai-key-form";
 import { AiPanel } from "@/components/settings/ai-panel";
-import { KeysPanel } from "@/components/settings/keys-panel";
-import { BrandPanel } from "@/components/settings/brand-panel";
+import { AppearancePicker } from "@/components/theme-toggle";
 
 // Settings without leaving the page: a right-side sheet over whatever you're
 // doing (editor or home). Opens from the gear in the editor bar, the home
@@ -30,7 +29,7 @@ import { BrandPanel } from "@/components/settings/brand-panel";
 // /settings renders the same <SettingsContent> as a full page.
 
 export type SettingsMode = "server" | "local" | "auto";
-export type SettingsTab = "ai" | "keys" | "brand";
+export type SettingsTab = "ai" | "look";
 
 interface OpenOpts {
   opener?: HTMLElement | null;
@@ -158,13 +157,13 @@ function SettingsSheet({ mode, initialTab, onClose }: { mode: SettingsMode; init
 
   return (
     <div className="fixed inset-0 z-[150] flex justify-end" onKeyDown={onKeyDown}>
-      <div className="absolute inset-0 bg-black/70" aria-hidden onPointerDown={onClose} />
+      <div className="absolute inset-0 bg-scrim" aria-hidden onPointerDown={onClose} />
       <div
         ref={ref}
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
-        className="relative flex h-full w-full max-w-[520px] flex-col border-l border-line-strong bg-black shadow-[-30px_0_80px_-20px_rgba(0,0,0,0.95)]"
+        className="relative flex h-full w-full max-w-[520px] flex-col border-l border-line-strong bg-ground shadow-[-30px_0_80px_-20px_var(--color-shade)]"
       >
         <SettingsContent mode={mode} initialTab={initialTab} titleId={titleId} onClose={onClose} />
       </div>
@@ -172,10 +171,9 @@ function SettingsSheet({ mode, initialTab, onClose }: { mode: SettingsMode; init
   );
 }
 
-const TABS: Array<{ id: SettingsTab; label: string; server: boolean }> = [
-  { id: "ai", label: "AI", server: false },
-  { id: "keys", label: "Other keys", server: true },
-  { id: "brand", label: "Your brand", server: true },
+const TABS: Array<{ id: SettingsTab; label: string }> = [
+  { id: "ai", label: "AI" },
+  { id: "look", label: "Appearance" },
 ];
 
 /**
@@ -197,7 +195,7 @@ export function SettingsContent({
   onClose?: () => void;
   page?: boolean;
   onTabChange?: (t: SettingsTab) => void;
-  onDirtyChange?: (part: "keys" | "brand" | "ai", dirty: boolean) => void;
+  onDirtyChange?: (dirty: boolean) => void;
 }) {
   const [tab, setTabRaw] = useState<SettingsTab>(initialTab);
   useEffect(() => setTabRaw(initialTab), [initialTab]);
@@ -206,7 +204,8 @@ export function SettingsContent({
     onTabChange?.(t);
   };
   const [payload, setPayload] = useState<ConfigPayload | null>(null);
-  const [apiDown, setApiDown] = useState(mode === "local");
+  // The public static site has no server API: only the browser-only settings.
+  const [apiDown, setApiDown] = useState(mode === "local" || !!process.env.NEXT_PUBLIC_LOSO_STATIC);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [advanced, setAdvanced] = useState(false);
   const fallbackId = useId();
@@ -214,9 +213,7 @@ export function SettingsContent({
   // Stable callbacks: the panels re-run their "dirty" effect on identity change.
   const dirtyRef = useRef(onDirtyChange);
   dirtyRef.current = onDirtyChange;
-  const aiDirty = useCallback((d: boolean) => dirtyRef.current?.("ai", d), []);
-  const keysDirty = useCallback((d: boolean) => dirtyRef.current?.("keys", d), []);
-  const brandDirty = useCallback((d: boolean) => dirtyRef.current?.("brand", d), []);
+  const aiDirty = useCallback((d: boolean) => dirtyRef.current?.(d), []);
 
   const load = useCallback(async () => {
     setLoadError(null);
@@ -232,7 +229,7 @@ export function SettingsContent({
   }, [mode]);
 
   useEffect(() => {
-    if (mode === "local") return;
+    if (mode === "local" || process.env.NEXT_PUBLIC_LOSO_STATIC) return;
     load();
     const reload = () => load();
     window.addEventListener(AI_CONFIG_CHANGED, reload);
@@ -240,8 +237,8 @@ export function SettingsContent({
   }, [mode, load]);
 
   const local = mode === "local" || apiDown;
-  const tabs = TABS.filter((t) => !local || !t.server);
-  const shown = tabs.some((t) => t.id === tab) ? tab : "ai";
+  const tabs = TABS;
+  const shown = tab;
 
   function onTabKey(e: ReactKeyboardEvent, i: number) {
     const dir = e.key === "ArrowRight" ? 1 : e.key === "ArrowLeft" ? -1 : 0;
@@ -341,17 +338,9 @@ export function SettingsContent({
             </div>
           )}
         </div>
-        {!local && (
-          <>
-            {/* Mounted while the sheet is open so switching tabs never drops typing. */}
-            <div id={`${hId}-panel-keys`} role="tabpanel" aria-labelledby={`${hId}-tab-keys`} hidden={shown !== "keys"}>
-              <KeysPanel onDirtyChange={keysDirty} />
-            </div>
-            <div id={`${hId}-panel-brand`} role="tabpanel" aria-labelledby={`${hId}-tab-brand`} hidden={shown !== "brand"}>
-              <BrandPanel onDirtyChange={brandDirty} />
-            </div>
-          </>
-        )}
+        <div id={`${hId}-panel-look`} role="tabpanel" aria-labelledby={`${hId}-tab-look`} hidden={shown !== "look"}>
+          <AppearancePicker />
+        </div>
       </div>
     </>
   );

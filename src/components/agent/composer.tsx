@@ -27,21 +27,39 @@ export interface ComposerHandle {
 
 const MAX_LINES_PX = 200;
 
-export function useDraft(key: string) {
+// Drafts survive a reload, not the browser closing (sessionStorage), and a
+// draft that looks like a pasted API key is never stored. A draft written
+// around attached pictures ("Fix this: … (at 0:05)") isn't stored either:
+// the pictures can't come back after a reload, and the words alone would
+// point Loso at a picture it never gets.
+const LOOKS_LIKE_KEY = /sk-ant-|\bsk-[A-Za-z0-9]{16}|gsk_|AIza/;
+
+export function useDraft(key: string, persist = true) {
   const [draft, setDraft] = useState("");
+  const persistRef = useRef(persist);
+  persistRef.current = persist;
   useEffect(() => {
     try {
-      setDraft(localStorage.getItem(key) ?? "");
+      localStorage.removeItem(key); // drafts from before this moved to sessionStorage
+      setDraft(sessionStorage.getItem(key) ?? "");
     } catch {
       /* no storage: start empty */
     }
   }, [key]);
+  useEffect(() => {
+    if (persist) return;
+    try {
+      sessionStorage.removeItem(key);
+    } catch {
+      /* ignore */
+    }
+  }, [key, persist]);
   const set = useCallback(
     (v: string) => {
       setDraft(v);
       try {
-        if (v) localStorage.setItem(key, v);
-        else localStorage.removeItem(key);
+        if (v && persistRef.current && !LOOKS_LIKE_KEY.test(v)) sessionStorage.setItem(key, v);
+        else sessionStorage.removeItem(key);
       } catch {
         /* ignore */
       }
@@ -137,7 +155,7 @@ export const Composer = forwardRef<
   return (
     <div className="flex flex-col gap-2 px-4 pb-4 pt-2">
       {above}
-      <div className="flex flex-col border border-edge/70 bg-black transition-colors focus-within:border-lime/70">
+      <div className="flex flex-col border border-edge/70 bg-ground transition-colors focus-within:border-lime/70">
         {attachments.length > 0 && (
           <ul className="flex flex-wrap gap-1.5 border-b border-line px-2.5 pb-2 pt-2.5" aria-label="Attached">
             {attachments.map((a, i) => (
@@ -240,7 +258,7 @@ export const Composer = forwardRef<
               onClick={() => canSend && onSubmit()}
               className={cx(
                 "mb-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-full transition-colors",
-                canSend ? "bg-lime text-black hover:bg-lime-deep" : "border border-line-strong text-ink-faint"
+                canSend ? "bg-lime-fill text-black hover:bg-lime-deep" : "border border-line-strong text-ink-faint"
               )}
             >
               <ArrowUp size={16} />

@@ -21,6 +21,12 @@ export async function GET(
 
   const size = fs.statSync(filePath).size;
   const cache = "public, max-age=31536000, immutable";
+  // Never let a stored file run as a page on this origin.
+  const safety = {
+    "X-Content-Type-Options": "nosniff",
+    "Content-Security-Policy": "sandbox; default-src 'none'",
+    ...(meta.ext === "svg" ? { "Content-Disposition": "attachment" } : {}),
+  };
   const range = req.headers.get("range");
 
   // Range support is required for browsers to stream/seek video & audio —
@@ -44,6 +50,7 @@ export async function GET(
         "Accept-Ranges": "bytes",
         "Content-Length": String(end - start + 1),
         "Cache-Control": cache,
+        ...safety,
       },
     });
   }
@@ -55,6 +62,7 @@ export async function GET(
       "Content-Length": String(size),
       "Accept-Ranges": "bytes",
       "Cache-Control": cache,
+      ...safety,
     },
   });
 }

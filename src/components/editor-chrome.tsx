@@ -30,6 +30,7 @@ export function EditableTitle({
       onChange={(e) => setDraft(e.target.value)}
       onBlur={commit}
       onKeyDown={(e) => {
+        if (e.nativeEvent.isComposing) return;
         if (e.key === "Enter") e.currentTarget.blur();
         if (e.key === "Escape") {
           setDraft(value);
@@ -38,7 +39,7 @@ export function EditableTitle({
         }
       }}
       size={Math.max(8, Math.min(40, draft.length + 1))}
-      className="min-w-0 border-b border-transparent bg-transparent font-serif text-[18px] italic tracking-tight text-ink outline-none transition-colors hover:border-line-strong focus:border-lime"
+      className="min-w-0 max-w-full truncate border-b border-transparent bg-transparent font-serif text-[18px] italic tracking-tight text-ink outline-none transition-colors hover:border-line-strong focus:border-lime"
     />
   );
 }
@@ -75,13 +76,17 @@ export function SaveStatus({ state, onRetry }: { state: SaveState; onRetry?: () 
 }
 
 // ---------- Narrow-window notice ----------
-// The editors use fixed side rails; below ~768px the stage collapses.
+// Below 768px the editor doesn't fit: say so kindly, and how to fix it.
 
 export function NarrowScreenNote() {
   return (
-    <div className="border-b border-line bg-panel px-5 py-2.5 md:hidden">
-      <p className="font-serif text-[14px] italic text-ink-dim">
-        Loso works best in a wide window on a computer. Make this window wider to see everything.
+    <div role="note" className="flex items-start gap-3 border-b border-line bg-panel px-5 py-3 md:hidden">
+      <span aria-hidden className="mt-1.5 h-2 w-2 shrink-0 rounded-full bg-lime" />
+      <p className="text-[14px] leading-snug text-ink">
+        <span className="font-serif text-[17px] italic">Loso needs a bigger screen.</span>{" "}
+        <span className="text-ink-dim">
+          Use Chrome or Edge on a computer, or make this window wider, to see your video and Loso side by side.
+        </span>
       </p>
     </div>
   );

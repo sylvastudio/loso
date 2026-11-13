@@ -12,7 +12,6 @@ import {
   setAiLastTestRaw,
   setApiKey,
 } from "@/lib/repo";
-import { maskKey } from "@/lib/providers";
 import type { AiConfig, ChatAdapter, ChatRequest, ChatResponse, ProviderKind, ProviderPresetId } from "./types";
 import { PRESETS, getPreset, type ProviderPreset } from "./presets";
 import { openaiAdapter } from "./openai";
@@ -27,6 +26,11 @@ const ADAPTERS: Record<ProviderKind, ChatAdapter> = {
   anthropic: anthropicAdapter,
   gemini: geminiAdapter,
 };
+
+export function maskKey(key: string): string {
+  if (key.length <= 8) return "••••••••";
+  return `${key.slice(0, 4)}…${key.slice(-4)}`;
+}
 
 export const NO_MODEL_MESSAGE = "No AI model configured — add one in Settings → AI model";
 
@@ -46,15 +50,16 @@ function readStored(): StoredConfig | null {
       model: parsed.model ?? "",
       vision: parsed.vision ?? false,
       tools: parsed.tools ?? true,
-      transcription: parsed.transcription ?? "provider",
+      // "groq" (a separate Groq transcription key) was retired: fall back to the provider.
+      transcription: parsed.transcription === "local" ? "local" : "provider",
     };
   } catch {
     return null;
   }
 }
 
-// Providers that also have a row under Settings → API Keys share that one key:
-// one place to paste it, and switching the agent's model never deletes it.
+// Groq and Anthropic keep their key in a per-provider row (see repo.ts), so
+// switching the agent between providers never deletes it.
 const SHARED_KEY_PRESETS = new Set<ProviderPresetId>(["groq", "anthropic"]);
 
 export function isSharedKeyPreset(id: ProviderPresetId): id is "groq" | "anthropic" {
@@ -132,12 +137,12 @@ export function saveAiConfig(patch: AiConfigPatch): AiConfig | null {
     tools: patch.tools ?? base.tools,
     transcription: patch.transcription ?? base.transcription,
   };
-  if (!["provider", "local", "groq"].includes(next.transcription)) next.transcription = "provider";
+  if (next.transcription !== "local") next.transcription = "provider";
   setAiConfigRaw(JSON.stringify(next));
   // A new provider or model invalidates the last test result.
   if (switching || (patch.model !== undefined && patch.model.trim() !== base.model)) setAiLastTestRaw(null);
   if (isSharedKeyPreset(preset.id)) {
-    // Shared providers keep their key in Settings → API Keys (one source of truth).
+    // These providers keep their key in their own row (one source of truth).
     if (patch.apiKey !== undefined) setApiKey(preset.id, patch.apiKey ?? "");
     if (switching) setAiKey(null);
   } else if (patch.apiKey !== undefined) {
@@ -176,7 +181,7 @@ export function recordLastTest(t: Omit<LastTest, "at">) {
 export interface PublicAiConfig extends Omit<AiConfig, "apiKey"> {
   hasKey: boolean;
   maskedKey: string | null;
-  /** "shared" = the key lives in Settings → API Keys (Groq, Anthropic). */
+  /** "shared" = the key lives in the provider's own row (Groq, Anthropic), kept across switches. */
   keySource: "shared" | "agent" | null;
   needsKey: boolean;
   /** Last test of the *current* model, if any. */
@@ -222,6 +227,8 @@ export async function listModels(draft?: Partial<AiConfig>): Promise<string[]> {
   return ADAPTERS[cfg.kind].listModels(cfg);
 }
 
+const trimUrl = (u: string | undefined) => (u ?? "").trim().replace(/\/+$/, "").toLowerCase();
+
 function mergeDraft(draft?: Partial<AiConfig>): AiConfig {
   const saved = getAiConfig();
   if (!draft || !draft.preset) {
@@ -231,12 +238,17 @@ function mergeDraft(draft?: Partial<AiConfig>): AiConfig {
   const preset = getPreset(draft.preset);
   if (!preset) throw new Error(`Unknown provider preset "${draft.preset}"`);
   const samePreset = saved?.preset === preset.id;
+  const baseUrl = preset.editableBaseUrl ? (draft.baseUrl ?? (samePreset ? saved!.baseUrl : preset.baseUrl)) : preset.baseUrl;
+  // A stored key only ever goes to the address it was saved with — never to a
+  // new base URL supplied in a request.
+  const storedKeyUrl = samePreset ? saved!.baseUrl : preset.baseUrl;
+  const mayReuseKey = trimUrl(baseUrl) === trimUrl(storedKeyUrl);
   return {
     preset: preset.id,
     kind: preset.kind,
-    baseUrl: preset.editableBaseUrl ? (draft.baseUrl ?? (samePreset ? saved!.baseUrl : preset.baseUrl)) : preset.baseUrl,
+    baseUrl,
     model: draft.model ?? (samePreset ? saved!.model : ""),
-    apiKey: draft.apiKey || (samePreset ? saved!.apiKey : keyFor(preset.id)),
+    apiKey: draft.apiKey || (mayReuseKey ? (samePreset ? saved!.apiKey : keyFor(preset.id)) : null),
     vision: samePreset ? saved!.vision : false,
     tools: samePreset ? saved!.tools : true,
     transcription: samePreset ? saved!.transcription : "provider",

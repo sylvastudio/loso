@@ -1,9 +1,13 @@
 @import "tailwindcss";
 
 @theme {
-  --color-black: #0a0a0b;
+  /* Dark is the default palette. Light values live below, switched by
+     <html data-theme="system|light|dark"> (see src/lib/theme.ts). */
+  --color-black: #0a0a0b; /* constant: text and marks ON lime fills, both themes */
+  --color-ground: #0a0a0b; /* the page itself: sheets, popovers, fields */
   --color-void: #050506;
   --color-panel: #101013;
+  --color-stage: #050506; /* the well around the video (stays dark in light mode) */
   --color-line: #1e1e23;
   --color-line-strong: #2e2e36;
   --color-ink: #f2f1ec;
@@ -11,9 +15,12 @@
   --color-ink-faint: #7c7c84; /* text-safe muted (~4.6:1 on black) */
   --color-ink-ghost: #55555c; /* decoration only — never body text */
   --color-edge: #6b6b73; /* control boundaries: fields, chips, toggles (≥3:1 on black) */
-  --color-lime: #d4f53c;
-  --color-lime-deep: #b8dc22;
+  --color-lime: #d4f53c; /* the accent as text, outline, rule, dot */
+  --color-lime-fill: #d4f53c; /* the accent as a filled surface (always dark text on it) */
+  --color-lime-deep: #b8dc22; /* hover on a lime fill */
   --color-danger: #ff5c5c;
+  --color-shade: rgb(0 0 0 / 0.95); /* shadow colour for floating chrome */
+  --color-scrim: rgb(10 10 11 / 0.7); /* behind modal sheets and dialogs */
 }
 
 /* Font tokens reference next/font runtime variables (scoped to <body>), so they
@@ -24,12 +31,87 @@
   --font-mono: var(--font-plex-mono), monospace;
 }
 
-html {
+/* ---------- Light: warm newsprint, ink-black type, olive-lime accent ----------
+   Kept in two copies on purpose: an explicit choice, and "system" when the OS
+   is light. Edit both together. Contrast (on ground / panel):
+   ink 15.9 / 14.0 · ink-dim 6.9 / 6.1 · ink-faint 5.2 / 4.6 · lime 5.9 / 5.2
+   · danger 5.8 / 5.1 · edge 3.7 / 3.2 (non-text) · black on lime-fill 16.0 */
+:root {
   color-scheme: dark;
+  --grain-opacity: 0.5;
+  --selection-mix: 30%;
+}
+:root[data-theme="light"] {
+  color-scheme: light;
+  --color-ground: #f2eee3;
+  --color-void: #e9e4d7;
+  --color-panel: #e6e0d2;
+  --color-stage: #1c1b18;
+  --color-line: #dad3c3;
+  --color-line-strong: #c6bda9;
+  --color-ink: #16140f;
+  --color-ink-dim: #55504a;
+  --color-ink-faint: #68625a;
+  --color-ink-ghost: #a8a191;
+  --color-edge: #827a68;
+  --color-lime: #4a6300;
+  --color-lime-fill: #d4f53c;
+  --color-lime-deep: #c2e52a;
+  --color-danger: #b0261d;
+  --color-shade: rgb(60 48 24 / 0.28);
+  --color-scrim: rgb(28 25 18 / 0.38);
+  --grain-opacity: 0.9;
+  --selection-mix: 70%;
+}
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    color-scheme: light;
+    --color-ground: #f2eee3;
+    --color-void: #e9e4d7;
+    --color-panel: #e6e0d2;
+    --color-stage: #1c1b18;
+    --color-line: #dad3c3;
+    --color-line-strong: #c6bda9;
+    --color-ink: #16140f;
+    --color-ink-dim: #55504a;
+    --color-ink-faint: #68625a;
+    --color-ink-ghost: #a8a191;
+    --color-edge: #827a68;
+    --color-lime: #4a6300;
+    --color-lime-fill: #d4f53c;
+    --color-lime-deep: #c2e52a;
+    --color-danger: #b0261d;
+    --color-shade: rgb(60 48 24 / 0.28);
+    --color-scrim: rgb(28 25 18 / 0.38);
+    --grain-opacity: 0.9;
+    --selection-mix: 70%;
+  }
+}
+
+/* A subtree that is always dark, whatever the page theme: the chrome drawn
+   on top of the video (selection box, handles, "Loso:" tags) has to read
+   against footage, not paper. */
+.theme-dark {
+  color-scheme: dark;
+  --color-ground: #0a0a0b;
+  --color-void: #050506;
+  --color-panel: #101013;
+  --color-line: #1e1e23;
+  --color-line-strong: #2e2e36;
+  --color-ink: #f2f1ec;
+  --color-ink-dim: #8f8f97;
+  --color-ink-faint: #7c7c84;
+  --color-ink-ghost: #55555c;
+  --color-edge: #6b6b73;
+  --color-lime: #d4f53c;
+  --color-lime-fill: #d4f53c;
+  --color-lime-deep: #b8dc22;
+  --color-danger: #ff5c5c;
+  --color-shade: rgb(0 0 0 / 0.95);
 }
 
 body {
-  background: var(--color-black);
+  background: var(--color-ground);
   color: var(--color-ink);
   font-family: var(--font-grotesk), sans-serif;
   -webkit-font-smoothing: antialiased;
@@ -42,12 +124,13 @@ body::after {
   inset: 0;
   pointer-events: none;
   z-index: 100;
-  opacity: 0.5;
+  opacity: var(--grain-opacity);
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2'/%3E%3CfeColorMatrix values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0.03 0'/%3E%3C/filter%3E%3Crect width='180' height='180' filter='url(%23n)'/%3E%3C/svg%3E");
 }
 
 ::selection {
-  background: color-mix(in srgb, var(--color-lime) 30%, transparent);
+  background: color-mix(in srgb, var(--color-lime-fill) var(--selection-mix), transparent);
+  color: var(--color-ink);
 }
 
 * {
@@ -161,27 +244,7 @@ input[type="color"]::-webkit-color-swatch {
   border-radius: 999px;
 }
 
-/* ---------- Agent liveliness: one calm orb, one hairline shimmer ---------- */
-@keyframes breathe {
-  0%, 100% { opacity: 1; transform: scale(1); box-shadow: 0 0 0 0 color-mix(in srgb, var(--color-lime) 45%, transparent); }
-  50% { opacity: 0.55; transform: scale(0.82); box-shadow: 0 0 10px 2px color-mix(in srgb, var(--color-lime) 25%, transparent); }
-}
-.orb {
-  display: inline-block;
-  width: 10px;
-  height: 10px;
-  flex-shrink: 0;
-  border-radius: 999px;
-  background: var(--color-lime);
-}
-.orb.idle {
-  background: transparent;
-  box-shadow: inset 0 0 0 1.5px var(--color-lime);
-}
-.orb.working {
-  animation: breathe 2.4s ease-in-out infinite;
-}
-
+/* ---------- Agent liveliness: the Onion Skin spinner (below), one hairline shimmer ---------- */
 @keyframes shimmer {
   from { transform: translateX(-100%); }
   to { transform: translateX(250%); }
@@ -225,4 +288,31 @@ input[type="color"]::-webkit-color-swatch {
   }
   .shimmer::after { display: none; }
   .shimmer { background: color-mix(in srgb, var(--color-lime) 50%, var(--color-line)); }
+}
+
+/* Onion Skin spinner (LosoMark working): frames step forward like a film gate. */
+.onion-working .onion-f { animation: onion-advance 2.1s cubic-bezier(.6, 0, .3, 1) infinite; }
+.onion-working .onion-f2 { animation-delay: -0.7s; }
+.onion-working .onion-f3 { animation-delay: -1.4s; }
+.onion-working .onion-dot { transform-box: fill-box; transform-origin: center; animation: onion-dot 0.7s ease-out infinite; }
+@keyframes onion-advance {
+  0%, 13% { transform: translate(16px, -16px); opacity: .3; }
+  33%, 46% { transform: translate(8px, -8px); opacity: .6; }
+  66%, 79% { transform: translate(0, 0); opacity: 1; }
+  95% { transform: translate(-9px, 9px); opacity: 0; }
+  95.1% { transform: translate(24px, -24px); opacity: 0; }
+  100% { transform: translate(16px, -16px); opacity: .3; }
+}
+@keyframes onion-dot {
+  0%, 39% { opacity: 1; transform: scale(1); }
+  48%, 92% { opacity: 0; transform: scale(.4); }
+  100% { opacity: 1; transform: scale(1); }
+}
+@keyframes onion-breathe { 0%, 100% { opacity: 1; } 50% { opacity: .45; } }
+@media (prefers-reduced-motion: reduce) {
+  /* Still mark, frames in place; only the dot breathes slowly. */
+  .onion-working .onion-f { animation: none !important; }
+  .onion-working .onion-f2 { transform: translate(8px, -8px); opacity: .6; }
+  .onion-working .onion-f3 { transform: translate(16px, -16px); opacity: .3; }
+  .onion-working .onion-dot { animation: onion-breathe 3.2s ease-in-out infinite !important; }
 }

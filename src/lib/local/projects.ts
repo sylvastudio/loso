@@ -13,6 +13,8 @@ import { idbAll, idbDelete, idbGet, idbPut } from "./db";
 import { folderPermission, freeName, readText, requestFolderPermission, writeFile } from "./folder";
 
 export const PROJECT_EXT = ".loso";
+/** A .loso file is a few KB to a few MB; anything bigger isn't one (or would hang the tab). */
+const MAX_PROJECT_BYTES = 20 * 1024 * 1024;
 
 export const losoFileSchema = z.object({
   app: z.literal("loso"),
@@ -61,11 +63,12 @@ export async function listLocalProjects(): Promise<LocalProjectRecord[]> {
 export const getLocalProject = (id: string) => idbGet<LocalProjectRecord>("projects", id);
 
 // Forget a project in this browser. The .loso file and media stay in the folder.
-export const forgetLocalProject = (id: string) => idbDelete("projects", id);
+export const forgetLocalProject = (id: string) =>
+  Promise.all([idbDelete("projects", id), idbDelete("versions", `local:${id}`).catch(() => {})]).then(() => undefined);
 
-function recordFor(dir: FileSystemDirectoryHandle, fileName: string, f: LosoFile): LocalProjectRecord {
+function recordFor(dir: FileSystemDirectoryHandle, fileName: string, f: LosoFile, id = f.id): LocalProjectRecord {
   return {
-    id: f.id,
+    id,
     title: f.title,
     fileName,
     folderName: dir.name,
@@ -108,7 +111,7 @@ export async function adoptLocalProject(
   dir: FileSystemDirectoryHandle,
   fileName: string
 ): Promise<LocalProjectRecord | null> {
-  const text = await readText(dir, fileName);
+  const text = await readText(dir, fileName, MAX_PROJECT_BYTES);
   if (!text) return null;
   let parsed;
   try {
@@ -117,7 +120,18 @@ export async function adoptLocalProject(
     return null;
   }
   if (!parsed.success) return null;
-  const record = recordFor(dir, fileName, parsed.data);
+  let file = parsed.data;
+  // A copied (or crafted) file can carry another project's id: give it its own
+  // instead of overwriting that project's entry, chat and settings.
+  const existing = await idbGet<LocalProjectRecord>("projects", file.id);
+  if (existing) {
+    const same = existing.fileName === fileName && (await existing.dir.isSameEntry(dir).catch(() => false));
+    if (!same) {
+      file = { ...file, id: crypto.randomUUID() };
+      await writeFile(dir, fileName, JSON.stringify(file, null, 2));
+    }
+  }
+  const record = recordFor(dir, fileName, file);
   await idbPut("projects", record.id, record);
   return record;
 }
@@ -138,7 +152,7 @@ export const askProjectAccess = (record: LocalProjectRecord) => requestFolderPer
 export class ProjectFileError extends Error {}
 
 export async function openLocalProject(record: LocalProjectRecord): Promise<OpenProject> {
-  const text = await readText(record.dir, record.fileName);
+  const text = await readText(record.dir, record.fileName, MAX_PROJECT_BYTES);
   if (text === null) {
     throw new ProjectFileError(`“${record.fileName}” is no longer in the folder “${record.folderName}”.`);
   }
@@ -160,7 +174,7 @@ export async function saveLocalProject(
 ): Promise<OpenProject> {
   const file: LosoFile = { ...open.file, ...patch, updatedAt: Date.now() };
   await writeFile(open.record.dir, open.record.fileName, JSON.stringify(file, null, 2));
-  const record = recordFor(open.record.dir, open.record.fileName, file);
+  const record = recordFor(open.record.dir, open.record.fileName, file, open.record.id);
   await idbPut("projects", record.id, record);
   return { record, file };
 }

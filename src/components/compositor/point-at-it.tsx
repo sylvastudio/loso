@@ -3,8 +3,9 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type RefObject } from "react";
 import { createPortal } from "react-dom";
 import type { PlayerRef } from "@remotion/player";
-import { Loader2, PenLine, Undo2 } from "lucide-react";
+import { PenLine, Undo2 } from "lucide-react";
 import { Button, cx } from "@/components/ui";
+import { LosoMark } from "@/components/logo";
 import { CompositorComposition } from "@/remotion/compositor";
 import type { CompositorDoc, Layer, ResolvedCompositorDoc } from "@/lib/compositor";
 import { clockAt } from "@/lib/screenshot";
@@ -62,9 +63,16 @@ function pathOf(s: Pt[]) {
 }
 
 async function renderFrame(doc: ResolvedCompositorDoc, frame: number, scale: number): Promise<OffscreenCanvas> {
+  // The whole capture (loading the renderer included) gets a few seconds;
+  // after that Loso gets the sketch instead of the user waiting.
+  const timeout = new Promise<never>((_, rej) => setTimeout(() => rej(new Error("timed out")), 6000));
+  return Promise.race([drawFrame(doc, frame, scale), timeout]);
+}
+
+async function drawFrame(doc: ResolvedCompositorDoc, frame: number, scale: number): Promise<OffscreenCanvas> {
   const { renderStillOnWeb } = await import("@remotion/web-renderer");
   const props = { doc, webMedia: true };
-  const run = renderStillOnWeb({
+  return renderStillOnWeb({
     composition: {
       id: "compositor",
       component: CompositorComposition,
@@ -78,10 +86,8 @@ async function renderFrame(doc: ResolvedCompositorDoc, frame: number, scale: num
     frame,
     scale,
     isProduction: false,
-    delayRenderTimeoutInMilliseconds: 12000,
+    delayRenderTimeoutInMilliseconds: 6000,
   }).then((r) => r.canvas());
-  const timeout = new Promise<never>((_, rej) => setTimeout(() => rej(new Error("timed out")), 15000));
-  return Promise.race([run, timeout]);
 }
 
 /** Frame (or a sketch of the pieces) + the marks, as a PNG. */
@@ -164,7 +170,7 @@ export function PointAtItButton({
     const onKey = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.shiftKey && !e.altKey && e.code === "KeyX") {
         const t = e.target as HTMLElement | null;
-        if (t && (/^(INPUT|SELECT)$/.test(t.tagName) || t.isContentEditable)) return;
+        if (t && (/^(INPUT|SELECT|TEXTAREA)$/.test(t.tagName) || t.isContentEditable)) return;
         e.preventDefault();
         if (!activeRef.current && !blocked.current) startRef.current(ref.current);
       }
@@ -181,13 +187,14 @@ export function PointAtItButton({
       aria-disabled={disabledReason ? true : undefined}
       aria-keyshortcuts="Control+Shift+X Meta+Shift+X"
       title={disabledReason ?? `Circle what needs fixing (${POINT_SHORTCUT_LABEL})`}
+      aria-label="Point at it"
       onClick={() => !disabledReason && !active && onStart(ref.current)}
       className={cx(
-        "flex h-10 items-center gap-1.5 px-2.5 text-[13.5px] transition-colors",
+        "flex h-10 shrink-0 items-center gap-1.5 px-2 text-[13.5px] transition-colors xl:px-2.5",
         active ? "text-lime" : disabledReason ? "text-ink-faint" : "text-ink hover:text-lime"
       )}
     >
-      <PenLine size={15} aria-hidden /> Point at it
+      <PenLine size={15} aria-hidden /> <span className="hidden xl:inline">Point at it</span>
     </button>
   );
 }
@@ -200,6 +207,7 @@ export function PointAtIt({
   selected,
   barHost,
   barRight,
+  onBarHeight,
   agent,
   onCancel,
   onSend,
@@ -216,6 +224,8 @@ export function PointAtIt({
   barHost: HTMLElement | null;
   /** Keep the toolbar clear of the floating chat. */
   barRight: number;
+  /** The toolbar's height, so the stage can keep the frame below it. */
+  onBarHeight?: (px: number) => void;
   /** true = "Send to Loso"; false = local: "Save picture to folder". */
   agent: boolean;
   onCancel: () => void;
@@ -254,15 +264,22 @@ export function PointAtIt({
   }, []);
 
   const undoStroke = useCallback(() => setStrokes((s) => s.slice(0, -1)), []);
+  // Set when the user cancels mid-capture, so a late picture is dropped.
+  const cancelled = useRef(false);
 
   // Esc cancels; ⌘Z takes back the last mark (not an edit to the video).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement | null;
+      const typing = !!t && (/^(INPUT|TEXTAREA)$/.test(t.tagName) || t.isContentEditable);
       if (e.key === "Escape") {
-        if ((e.target as HTMLElement)?.tagName === "SELECT") return;
+        if (t?.tagName === "SELECT") return;
         e.preventDefault();
         e.stopPropagation();
-        if (!busy) onCancel();
+        cancelled.current = true;
+        onCancel();
+      } else if (typing) {
+        return;
       } else if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key.toLowerCase() === "z") {
         e.preventDefault();
         e.stopPropagation();
@@ -277,7 +294,7 @@ export function PointAtIt({
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, [onCancel, undoStroke, busy]);
+  }, [onCancel, undoStroke]);
 
   function toComp(e: React.PointerEvent): Pt {
     const r = svgRef.current!.getBoundingClientRect();
@@ -300,6 +317,7 @@ export function PointAtIt({
     setNote(null);
     try {
       const { blob, sketch } = await makePicture(resolved, frame, strokes, target, doc.layers);
+      if (cancelled.current) return;
       const name = `Marked frame ${time.replace(":", "-")}.png`;
       const file = new File([blob], name, { type: "image/png" });
       const around = under.length ? `, around: ${under.map(label).join(", ")}` : "";
@@ -325,18 +343,34 @@ export function PointAtIt({
   }
 
   const sw = Math.max(8, W / 110);
-  // The toolbar gets out of the way: drawing near the top sends it down.
-  const [barLow, setBarLow] = useState(false);
+  // The toolbar sits above the frame: the editor moves the frame down by the
+  // toolbar's height while marking, so nothing on the video is covered.
+  const barRef = useRef<HTMLDivElement>(null);
+  const heightCb = useRef(onBarHeight);
+  heightCb.current = onBarHeight;
+  useEffect(() => {
+    const el = barRef.current;
+    if (!el) return;
+    const report = () => heightCb.current?.(el.offsetHeight);
+    const ro = new ResizeObserver(report);
+    ro.observe(el);
+    report();
+    return () => {
+      ro.disconnect();
+      heightCb.current?.(0);
+    };
+  }, []);
 
   const bar = (
     <div
-      className={cx("pointer-events-none absolute left-0 z-40 flex justify-center px-4", barLow ? "bottom-[52px]" : "top-3")}
+      ref={barRef}
+      className="pointer-events-none absolute left-0 top-2 z-40 flex justify-center px-4"
       style={{ right: barRight }}
     >
       <div
         role="region"
         aria-label="Point at it"
-        className="pointer-events-auto flex max-w-full flex-col gap-2 border border-lime/60 bg-black/95 px-4 py-2.5 shadow-[0_20px_60px_-20px_rgba(0,0,0,0.95)]"
+        className="pointer-events-auto flex max-w-full flex-col gap-2 border border-lime/60 bg-ground/95 px-4 py-2.5 shadow-[0_20px_60px_-20px_var(--color-shade)]"
       >
         <p ref={introRef} tabIndex={-1} id={`${ids}-intro`} className="text-[13.5px] leading-snug text-ink outline-none">
           <span className="font-serif text-[16px] italic">Point at it.</span>{" "}
@@ -381,7 +415,7 @@ export function PointAtIt({
               value={targetId}
               onChange={(e) => setTargetId(e.target.value)}
               disabled={busy}
-              className="h-8 max-w-[180px] border-b border-edge bg-black px-1 text-[13px] text-ink outline-none focus-visible:border-lime"
+              className="h-8 max-w-[180px] border-b border-edge bg-ground px-1 text-[13px] text-ink outline-none focus-visible:border-lime"
             >
               <option value="">None</option>
               {onStage.map((l) => (
@@ -392,17 +426,24 @@ export function PointAtIt({
             </select>
           </label>
           <span className="flex-1" />
-          <Button size="sm" variant="ghost" onClick={onCancel} disabled={busy}>
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() => {
+              cancelled.current = true;
+              onCancel();
+            }}
+          >
             Cancel
           </Button>
           {agent ? (
             <Button size="sm" onClick={() => finish("send")} disabled={!marked || busy} aria-describedby={`${ids}-why`}>
-              {busy && <Loader2 size={13} className="animate-spin motion-reduce:animate-none" aria-hidden />}
+              {busy && <LosoMark working size={16} />}
               {busy ? "Taking the picture…" : "Send to Loso"}
             </Button>
           ) : (
             <Button size="sm" onClick={() => finish("save")} disabled={!marked || busy || !onSave} aria-describedby={`${ids}-why`}>
-              {busy && <Loader2 size={13} className="animate-spin motion-reduce:animate-none" aria-hidden />}
+              {busy && <LosoMark working size={16} />}
               {busy ? "Saving…" : "Save picture to folder"}
             </Button>
           )}
@@ -435,8 +476,6 @@ export function PointAtIt({
           e.stopPropagation();
           (e.currentTarget as Element).setPointerCapture(e.pointerId);
           const p = toComp(e);
-          if (p[1] < H * 0.35) setBarLow(true);
-          else if (p[1] > H * 0.65) setBarLow(false);
           drawing.current = [p];
           setStrokes((s) => [...s, [p]]);
         }}

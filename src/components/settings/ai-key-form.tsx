@@ -1,11 +1,13 @@
 "use client";
 
+import { LocalConnect } from "@/components/agent/local-connect";
 import { useEffect, useId, useState } from "react";
 import { ArrowUpRight, Check, ChevronRight, Loader2 } from "lucide-react";
 import { Button, cx } from "@/components/ui";
 import { useConnectFlow } from "@/components/agent/use-connect";
 import { friendlyModel, goodFor, isFast } from "@/components/agent/model-chip";
 import type { ConfigPayload } from "@/components/agent/connect-card";
+import { topPicks } from "@/lib/ai/models";
 
 // "AI" in the settings sheet: paste a key, it is checked by itself (loading
 // the model list is free and proves the key works), pick a brain with a
@@ -53,24 +55,9 @@ function GetAKey({ docsUrl }: { docsUrl?: string }) {
 }
 
 /** The local (folder) projects and the static site: same shape, honestly not working yet. */
+/** The browser-only app: the user's own Claude key, kept in this browser. */
 export function LocalKeyForm() {
-  const id = useId();
-  return (
-    <div className="flex flex-col gap-5">
-      <div className="flex flex-col gap-2">
-        <h3 className="font-serif text-[26px] font-light italic leading-tight text-ink">Loso needs a key to think.</h3>
-        <p className="text-[13.5px] leading-relaxed text-ink-dim">A key is like a library card for an AI. You paste it once.</p>
-      </div>
-      <label className="flex flex-col gap-1.5">
-        <span className="text-[13px] text-ink-dim">Paste your Claude key</span>
-        <input disabled aria-describedby={`${id}-soon`} placeholder="sk-ant-…" className="uline cursor-not-allowed font-mono text-[13px] opacity-60" />
-      </label>
-      <p id={`${id}-soon`} className="border-l-2 border-lime pl-3 text-[13.5px] leading-snug text-ink">
-        This arrives in the next update. When it does, your key stays in this browser on this computer. Nothing is saved yet.
-      </p>
-      <GetAKey />
-    </div>
-  );
+  return <LocalConnect className="" />;
 }
 
 export function AiKeyForm({ payload, onSaved }: { payload: ConfigPayload; onSaved: () => void }) {
@@ -88,7 +75,7 @@ export function AiKeyForm({ payload, onSaved }: { payload: ConfigPayload; onSave
 
   const label = preset ? preset.label.replace(" (OpenAI-compatible)", "") : "";
   const keyWord = preset?.id === FIRST ? "Claude" : label;
-  const list = ranked ? (more ? ranked.chat : ranked.chat.slice(0, 4)) : [];
+  const list = ranked ? (more ? ranked.chat : topPicks(ranked.chat, 4)) : [];
   if (ranked && !more && model && !list.some((m) => m.id === model)) {
     const cur = ranked.chat.find((m) => m.id === model);
     if (cur) list.push(cur);

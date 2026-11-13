@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { FolderOpen } from "lucide-react";
 import { Button, ErrorState } from "@/components/ui";
+import { LosoMark } from "@/components/logo";
 import { CompositorEditor } from "@/components/compositor/editor";
 import type { EditorBackend } from "@/components/compositor/backend";
 import { localBackend } from "@/lib/local/backend";
@@ -71,7 +72,12 @@ function EditInner() {
 
   switch (state.kind) {
     case "loading":
-      return <p className="py-24 text-center text-sm text-ink-faint">Opening…</p>;
+      return (
+        <p role="status" className="flex items-center justify-center gap-3 py-24 text-sm text-ink-dim">
+          <LosoMark working size={22} />
+          Opening your video…
+        </p>
+      );
     case "missing":
       return (
         <ErrorState title="This project isn't in this browser" detail="Open it from its folder on the projects page.">

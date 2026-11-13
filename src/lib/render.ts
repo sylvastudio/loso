@@ -86,5 +86,7 @@ export async function renderCompositor(
 }
 
 export function renderPath(projectId: string): string {
+  // Ids are short hex/slug strings; anything else could walk out of the folder.
+  if (!/^[A-Za-z0-9_-]{1,64}$/.test(projectId)) throw new Error("Bad project id");
   return path.join(RENDERS_DIR, `${projectId}.mp4`);
 }

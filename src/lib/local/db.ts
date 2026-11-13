@@ -1,10 +1,17 @@
 // Tiny IndexedDB wrapper for the browser-only app. Holds only what must live
-// in the browser: folder handles, the recent-projects index and saved
-// templates. Project content itself lives in the user's folder (.loso file).
+// in the browser: the recent-projects index (with each project's folder
+// handle), saved templates, the AI setup (+ the key, only if the user chose
+// "remember"), each project's chat with Loso, cached transcripts and each
+// project's versions (undo history). Project content itself lives in the
+// user's folder (.loso file).
+//
+// Versions:
+//   3 → 4: + "versions"; − "handles" (a remembered folder nothing read).
 
 const DB_NAME = "loso-local";
-const DB_VERSION = 2;
-export const STORES = ["handles", "projects", "templates"] as const;
+const DB_VERSION = 4;
+export const STORES = ["projects", "templates", "settings", "secrets", "chats", "transcripts", "versions"] as const;
+const RETIRED_STORES = ["handles"];
 export type StoreName = (typeof STORES)[number];
 
 let dbPromise: Promise<IDBDatabase> | null = null;
@@ -13,7 +20,9 @@ function openDb(): Promise<IDBDatabase> {
   dbPromise ??= new Promise((resolve, reject) => {
     const req = indexedDB.open(DB_NAME, DB_VERSION);
     req.onupgradeneeded = () => {
-      for (const s of STORES) if (!req.result.objectStoreNames.contains(s)) req.result.createObjectStore(s);
+      const db = req.result;
+      for (const s of STORES) if (!db.objectStoreNames.contains(s)) db.createObjectStore(s);
+      for (const s of RETIRED_STORES) if (db.objectStoreNames.contains(s)) db.deleteObjectStore(s);
     };
     req.onsuccess = () => {
       // Let a newer version in another tab upgrade instead of hanging it.

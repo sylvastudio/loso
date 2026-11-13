@@ -1,5 +1,10 @@
 import { z } from "zod";
 
+// Size bounds, so a shared .loso can't hang the tab or an export: 3 hours at
+// 120 fps, and enough layers for an hour of words on screen.
+export const MAX_FRAMES = 3 * 3600 * 120;
+export const MAX_LAYERS = 5000;
+
 // ---------- Layer schema (discriminated union on `type`) ----------
 
 export const ANIM_PRESETS = ["none", "fade", "rise", "scale", "hero"] as const;
@@ -23,15 +28,15 @@ const baseLayer = {
   // renderer ignores it. Legacy "Caption N" text layers count as captions too
   // (see isCaption in src/lib/caption-set.ts).
   role: z.enum(["caption"]).optional(),
-  x: z.number().default(0),
-  y: z.number().default(0),
-  width: z.number().default(200),
-  height: z.number().default(200),
+  x: z.number().min(-1e5).max(1e5).default(0),
+  y: z.number().min(-1e5).max(1e5).default(0),
+  width: z.number().min(0).max(1e5).default(200),
+  height: z.number().min(0).max(1e5).default(200),
   rotation: z.number().default(0),
   opacity: z.number().min(0).max(1).default(1),
   z: z.number().default(0),
-  from: z.number().default(0),
-  durationInFrames: z.number().default(150),
+  from: z.number().min(-MAX_FRAMES).max(MAX_FRAMES).default(0),
+  durationInFrames: z.number().min(0).max(MAX_FRAMES).default(150),
   radius: z.number().default(0),
   borderWidth: z.number().default(0),
   borderColor: z.string().default("#ffffff"),
@@ -69,8 +74,8 @@ export const audioLayerSchema = z.object({
 export const textLayerSchema = z.object({
   ...baseLayer,
   type: z.literal("text"),
-  text: z.string().default("Text"),
-  fontFamily: z.string().default("Montserrat"),
+  text: z.string().max(2000).default("Text"),
+  fontFamily: z.string().max(100).default("Montserrat"),
   fontSize: z.number().default(64),
   color: z.string().default("#ffffff"),
   fontWeight: z.number().default(800),
@@ -87,16 +92,16 @@ export const layerSchema = z.discriminatedUnion("type", [
 ]);
 
 export const compositorOutputSchema = z.object({
-  width: z.number().default(1080),
-  height: z.number().default(1920),
-  fps: z.number().default(30),
-  durationInFrames: z.number().default(300),
+  width: z.number().min(16).max(8192).default(1080),
+  height: z.number().min(16).max(8192).default(1920),
+  fps: z.number().min(1).max(120).default(30),
+  durationInFrames: z.number().min(0).max(MAX_FRAMES).default(300),
   background: z.string().default("#000000"),
 });
 
 export const compositorDocSchema = z.object({
   output: compositorOutputSchema.default({}),
-  layers: z.array(layerSchema).default([]),
+  layers: z.array(layerSchema).max(MAX_LAYERS).default([]),
 });
 
 export type VideoLayer = z.infer<typeof videoLayerSchema>;

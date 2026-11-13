@@ -1,6 +1,5 @@
-// Word-timed transcription with three engines:
+// Word-timed transcription for the server agent's footage tools, two engines:
 //   provider — the configured AI preset's /audio/transcriptions (OpenAI, Groq)
-//   groq     — the Groq key from Settings → API Keys
 //   local    — mlx_whisper (Apple Silicon) or openai-whisper on this machine
 import "server-only";
 import { execFile } from "node:child_process";
@@ -8,7 +7,6 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import { getApiKey } from "@/lib/repo";
 import { getAiConfig } from "./index";
 import { getPreset } from "./presets";
 import { providerFetch, trimSlash } from "./http";
@@ -286,37 +284,23 @@ async function transcribeLocal(file: string, language?: string): Promise<Transcr
 // ---------- engine choice ----------
 
 const NOTHING_AVAILABLE =
-  "No transcription engine available. Pick one: (1) set your AI model to OpenAI or Groq in Settings → AI model " +
-  "(their Whisper returns word timings), (2) save a Groq key in Settings → API Keys and choose “Groq key”, or " +
-  "(3) install local Whisper — `pip install mlx-whisper` on Apple Silicon, or `pip install openai-whisper`.";
+  "No transcription engine available. Pick one: (1) set your AI model to OpenAI or Groq in Settings → AI " +
+  "(their Whisper returns word timings), or (2) install local Whisper — `pip install mlx-whisper` on Apple " +
+  "Silicon, or `pip install openai-whisper`.";
 
-function groqTarget(apiKey: string): CloudTarget {
-  const preset = getPreset("groq")!;
-  return {
-    label: "Groq",
-    url: `${preset.baseUrl}/audio/transcriptions`,
-    apiKey,
-    model: preset.sttModel!,
-  };
-}
-
-export type TranscriptionEngine = "provider" | "groq" | "local" | "none";
+export type TranscriptionEngine = "provider" | "local" | "none";
 
 /** Which engine transcribeFile would use right now (for display). */
 export function resolveTranscriptionEngine(): { engine: TranscriptionEngine; detail: string } {
   const cfg = getAiConfig();
-  const groqKey = getApiKey("groq");
   const local = localWhisperAvailable();
   const localOr = (why: string) =>
-    local ? { engine: "local" as const, detail: `${local} on this Mac${why}` } : groqKey
-      ? { engine: "groq" as const, detail: `Groq key${why}` }
+    local
+      ? { engine: "local" as const, detail: `${local} on this Mac${why}` }
       : { engine: "none" as const, detail: "nothing available" };
 
-  if (!cfg) return groqKey ? { engine: "groq", detail: "Groq key (no AI model set)" } : localOr("");
-  if (cfg.transcription === "groq") {
-    return groqKey ? { engine: "groq", detail: "Groq key" } : localOr(" (no Groq key saved)");
-  }
-  if (cfg.transcription === "local") return local ? { engine: "local", detail: `${local} on this Mac` } : localOr(" (local Whisper not installed)");
+  if (!cfg) return localOr("");
+  if (cfg.transcription === "local") return localOr(local ? "" : " (local Whisper not installed)");
   const preset = getPreset(cfg.preset);
   if (preset?.sttWordTimings && cfg.apiKey) return { engine: "provider", detail: `${preset.label} · ${preset.sttModel}` };
   return localOr(` (${preset?.label ?? "provider"} has no word-timed speech-to-text)`);
@@ -340,7 +324,6 @@ export async function transcribeFile(filePath: string, opts: { language?: string
       opts.language
     );
   }
-  if (engine === "groq") return transcribeCloud(groqTarget(getApiKey("groq")!), filePath, opts.language);
   if (engine === "local") return transcribeLocal(filePath, opts.language);
   throw new Error(NOTHING_AVAILABLE);
 }

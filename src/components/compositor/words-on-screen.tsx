@@ -4,7 +4,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import type { PlayerRef } from "@remotion/player";
 import { ArrowLeft, Download, Minus, Play, Plus, Scissors, Trash2, Upload } from "lucide-react";
 import { cx } from "@/components/ui";
-import { FONT_CHOICES } from "@/lib/brand";
+import { FONT_CHOICES } from "@/lib/fonts";
 import type { CompositorDoc, TextLayer } from "@/lib/compositor";
 import {
   MAX_LINE,
@@ -283,7 +283,7 @@ export function WordsOnScreen({
       </div>
 
       {/* ---- Lines | Look ---- */}
-      <div className="sticky top-0 z-10 mt-4 bg-black">
+      <div className="sticky top-0 z-10 mt-4 bg-ground">
         <div role="tablist" aria-label="Words on screen" className="flex gap-6 border-b border-line px-5">
           {(
             [
@@ -790,7 +790,7 @@ function TimeStrip({
         <span
           onPointerDown={(e) => begin(e, "move")}
           className={cx(
-            "absolute bottom-1 flex h-7 cursor-grab items-center bg-lime text-[11.5px] font-medium text-black",
+            "absolute bottom-1 flex h-7 cursor-grab items-center bg-lime-fill text-[11.5px] font-medium text-black",
             drag && "cursor-grabbing",
           )}
           style={{ left: pct(c.from), width: `calc(${pct(end)} - ${pct(c.from)})` }}
@@ -1015,10 +1015,15 @@ function LookPanel({ doc, caps, change }: { doc: CompositorDoc; caps: TextLayer[
             >
               <span
                 className="flex h-full w-full items-center justify-center border border-edge text-[11px] font-semibold"
-                style={{
-                  background: bg ?? "repeating-linear-gradient(135deg,#1e1e23 0 4px,transparent 4px 8px)",
-                  color: bg && bg.startsWith("rgba(255") ? "#0a0a0b" : "#f2f1ec",
-                }}
+                style={
+                  bg
+                    ? // a box is a video colour: show it over dark footage, the same in both themes
+                      { background: `linear-gradient(${bg}, ${bg}), #3a3a40`, color: bg.startsWith("rgba(255") ? "#0a0a0b" : "#f2f1ec" }
+                    : {
+                        background: "repeating-linear-gradient(135deg,var(--color-line-strong) 0 4px,transparent 4px 8px)",
+                        color: "var(--color-ink)",
+                      }
+                }
               >
                 Aa
               </span>
@@ -1165,7 +1170,7 @@ function PositionPad({ doc, c, onY }: { doc: CompositorDoc; c: TextLayer; onY: (
   }
 
   return (
-    <div ref={ref} className="relative shrink-0 border border-edge bg-void" style={{ width: padW, height: padH }}>
+    <div ref={ref} className="relative shrink-0 border border-edge bg-stage" style={{ width: padW, height: padH }}>
       <div
         role="slider"
         tabIndex={0}
@@ -1185,7 +1190,7 @@ function PositionPad({ doc, c, onY }: { doc: CompositorDoc; c: TextLayer; onY: (
             onY(clampY(c.y + step));
           }
         }}
-        className="absolute flex cursor-ns-resize touch-none items-center justify-center bg-lime"
+        className="absolute flex cursor-ns-resize touch-none items-center justify-center bg-lime-fill"
         style={{
           left: c.x * scale,
           width: Math.max(8, c.width * scale),

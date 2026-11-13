@@ -8,7 +8,6 @@ const EXT_BY_MIME: Record<string, string> = {
   "image/png": "png",
   "image/jpeg": "jpg",
   "image/webp": "webp",
-  "image/svg+xml": "svg",
   "image/gif": "gif",
   "audio/mpeg": "mp3",
   "audio/wav": "wav",
@@ -19,13 +18,19 @@ const EXT_BY_MIME: Record<string, string> = {
   "video/quicktime": "mov",
 };
 
+/** Only media is stored: anything else (HTML, SVG, scripts) could run as a page on this origin. */
+export function isStorableMime(mime: string): boolean {
+  return mime in EXT_BY_MIME;
+}
+
 export function storeAsset(
   buffer: Buffer,
   mime: string,
   originalName: string,
   kind: string
 ): Omit<AssetMeta, "createdAt"> {
-  const ext = EXT_BY_MIME[mime] ?? (path.extname(originalName).slice(1) || "bin");
+  const ext = EXT_BY_MIME[mime];
+  if (!ext) throw new Error(`Unsupported file type: ${mime || "unknown"}`);
   const hash = crypto.createHash("sha256").update(buffer).digest("hex").slice(0, 24);
   const filePath = path.join(ASSETS_DIR, `${hash}.${ext}`);
   if (!fs.existsSync(filePath)) fs.writeFileSync(filePath, buffer);

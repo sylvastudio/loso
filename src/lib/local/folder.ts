@@ -1,9 +1,8 @@
 // Local-first folder access (File System Access API, Chrome/Edge).
 // The user's footage folder is read in place; Loso writes its project file
-// and exports back into the same folder. Directory handles are remembered in
-// IndexedDB so a return visit only needs a one-click permission prompt.
-
-import { idbGet, idbPut } from "./db";
+// and exports back into the same folder. Each project's folder handle is
+// remembered with the project (see projects.ts), so a return visit only needs
+// a one-click permission prompt.
 
 export const MEDIA_EXT = {
   video: ["mp4", "mov", "m4v", "webm", "mkv"],
@@ -35,18 +34,7 @@ export async function pickFolder(id = "loso-footage"): Promise<FileSystemDirecto
   const handle = await (window as unknown as {
     showDirectoryPicker: (o: object) => Promise<FileSystemDirectoryHandle>;
   }).showDirectoryPicker({ id, mode: "readwrite" });
-  await idbPut("handles", "folder", handle);
   return handle;
-}
-
-// The last folder picked, if any. Permission may still need a user gesture:
-// check with folderPermission() and ask with requestFolderPermission().
-export async function rememberedFolder(): Promise<FileSystemDirectoryHandle | null> {
-  try {
-    return (await idbGet<FileSystemDirectoryHandle>("handles", "folder")) ?? null;
-  } catch {
-    return null;
-  }
 }
 
 type PermissionHandle = FileSystemDirectoryHandle & {
@@ -129,9 +117,11 @@ export async function writeFile(
   await w.close();
 }
 
-export async function readText(dir: FileSystemDirectoryHandle, path: string): Promise<string | null> {
+export async function readText(dir: FileSystemDirectoryHandle, path: string, maxBytes = Infinity): Promise<string | null> {
   try {
-    return await (await (await fileAt(dir, path)).getFile()).text();
+    const file = await (await fileAt(dir, path)).getFile();
+    if (file.size > maxBytes) return null;
+    return await file.text();
   } catch {
     return null;
   }

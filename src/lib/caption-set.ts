@@ -266,11 +266,6 @@ export function addLineAt(
   return { doc: withCaptions(doc, [...caps, line]), newId };
 }
 
-export function removeLine(doc: CompositorDoc, id: string): CompositorDoc {
-  const caps = captionsOf(doc).filter((c) => c.id !== id);
-  return withCaptions(doc, caps);
-}
-
 // ---------- the whole set ----------
 
 export type CaptionLook = Partial<
@@ -382,11 +377,6 @@ export function shortenAll(doc: CompositorDoc, max = MAX_LINE): { doc: Composito
     });
   });
   return split ? { doc: withCaptions(doc, out), split } : { doc, split: 0 };
-}
-
-/** Mark legacy "Caption N" layers with the role, without changing anything else. */
-export function markCaptions(doc: CompositorDoc): CompositorDoc {
-  return doc.layers.some((l) => isCaption(l) && l.role !== "caption") ? withCaptions(doc, captionsOf(doc)) : doc;
 }
 
 // ---------- .srt files ----------

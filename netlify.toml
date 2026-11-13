@@ -1,0 +1,66 @@
+# loso.sylvastudio.com: the browser-only app as static files. Projects, footage
+# and the user's Claude key stay in their browser; there is no server.
+# The Content-Security-Policy (with hashes of Next's inline scripts) is written
+# to out/_headers by scripts/build-static.mjs at build time.
+
+[build]
+  command = "LOSO_STATIC=1 npm run build"
+  publish = "out"
+
+[build.environment]
+  NODE_VERSION = "22"
+
+[[headers]]
+  for = "/*"
+  [headers.values]
+    # Isolates the window from pages it opens (the Anthropic key page, etc.).
+    # No COEP: nothing here needs SharedArrayBuffer (Whisper runs single-threaded,
+    # WebCodecs doesn't need it), and COEP would block Hugging Face and fonts.
+    Cross-Origin-Opener-Policy = "same-origin"
+    Permissions-Policy = "camera=(), microphone=(), geolocation=(), payment=(), usb=(), serial=(), hid=(), bluetooth=(), midi=(), display-capture=(), interest-cohort=()"
+    Referrer-Policy = "no-referrer"
+    X-Content-Type-Options = "nosniff"
+    X-Frame-Options = "DENY"
+    Strict-Transport-Security = "max-age=31536000; includeSubDomains"
+
+# Next's hashed build files never change: cache them for good.
+[[headers]]
+  for = "/_next/static/*"
+  [headers.values]
+    Cache-Control = "public, max-age=31536000, immutable"
+
+# The speech model's runtime: big, and named for its version.
+[[headers]]
+  for = "/ort/*"
+  [headers.values]
+    Cache-Control = "public, max-age=604800"
+
+# The editor is one page that reads ?id= in the browser.
+[[redirects]]
+  from = "/edit/*"
+  to = "/edit.html"
+  status = 200
+
+# Old server-editor links go to the home page (projects live in the user's folder now).
+[[redirects]]
+  from = "/project/*"
+  to = "/"
+  status = 302
+
+# Share images and the home-screen icon are generated without a file extension.
+[[headers]]
+  for = "/opengraph-image"
+  [headers.values]
+    Content-Type = "image/png"
+[[headers]]
+  for = "/twitter-image"
+  [headers.values]
+    Content-Type = "image/png"
+[[headers]]
+  for = "/apple-icon"
+  [headers.values]
+    Content-Type = "image/png"
+[[headers]]
+  for = "/manifest.webmanifest"
+  [headers.values]
+    Content-Type = "application/manifest+json"
