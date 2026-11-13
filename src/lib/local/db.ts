@@ -1,16 +1,17 @@
 // Tiny IndexedDB wrapper for the browser-only app. Holds only what must live
 // in the browser: the recent-projects index (with each project's folder
 // handle), saved templates, the AI setup (+ the key, only if the user chose
-// "remember"), each project's chat with Loso, cached transcripts and each
-// project's versions (undo history). Project content itself lives in the
-// user's folder (.loso file).
+// "remember"), each project's chat with Loso, cached transcripts, each
+// project's versions (undo history) and a log of tokens the AI used (never
+// sent anywhere). Project content itself lives in the user's folder (.loso file).
 //
 // Versions:
 //   3 → 4: + "versions"; − "handles" (a remembered folder nothing read).
+//   4 → 5: + "usage".
 
 const DB_NAME = "loso-local";
-const DB_VERSION = 4;
-export const STORES = ["projects", "templates", "settings", "secrets", "chats", "transcripts", "versions"] as const;
+const DB_VERSION = 5;
+export const STORES = ["projects", "templates", "settings", "secrets", "chats", "transcripts", "versions", "usage"] as const;
 const RETIRED_STORES = ["handles"];
 export type StoreName = (typeof STORES)[number];
 
@@ -57,3 +58,4 @@ export const idbPut = (store: StoreName, key: string, value: unknown) =>
   run<IDBValidKey>(store, "readwrite", (s) => s.put(value, key)).then(() => undefined);
 export const idbDelete = (store: StoreName, key: string) =>
   run<undefined>(store, "readwrite", (s) => s.delete(key));
+export const idbClear = (store: StoreName) => run<undefined>(store, "readwrite", (s) => s.clear());

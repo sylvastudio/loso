@@ -50,6 +50,28 @@ export interface ChatApi {
   imageUrl(img: StoredImage): string;
   /** A frame of a footage clip for the storyboard card, if this agent can serve one by URL. */
   clipFrameUrl(folder: string | undefined, clip: string, t: number): string | null;
+  /** Rank model ids for a picker, when the provider says more than the names do (pictures). */
+  rank?(ids: string[]): RankedModel[];
+  /** Tokens and estimated cost of this chat, overall and per turn (local only). */
+  usage?(): Promise<ChatUsage>;
+}
+
+export interface UsageSum {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  /** Estimated USD of the calls with a known price. */
+  cost: number;
+  /** Calls without a known price (cost leaves them out). */
+  unpriced: number;
+}
+export interface ChatUsage {
+  chat: UsageSum;
+  turns: Record<string, UsageSum>;
+  /** This month's estimate across all projects, and the soft limit the user set (null = none). */
+  monthCost: number;
+  budget: number | null;
 }
 
 export function serverChatApi(projectId: string): ChatApi {

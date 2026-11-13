@@ -1,15 +1,16 @@
 // The studio agent, running in this browser tab: the same tool-calling loop
-// as the server agent (lib/studio/agent.ts), talking to Claude directly with
-// the user's own key. State lives in the stored chat, so the loop can pause
+// as the server agent (lib/studio/agent.ts), talking to the chosen provider
+// (Claude, OpenAI, Grok, Groq, Gemini, OpenRouter) directly with the user's
+// own key. Every model call's token count goes to the local usage log. State lives in the stored chat, so the loop can pause
 // for the user (questions, storyboard approval, confirming an export) and
 // pick up on the next call.
 
-import { anthropicAdapter } from "../../ai/anthropic";
 import { classifyAgentError } from "../../ai/errors";
 import type { AiConfig, ChatMessage, ChatRequest, ContentPart, ImagePart, ToolCall } from "../../ai/types";
 import type { CompositorDoc } from "../../compositor";
 import { buildSystemPrompt } from "../../studio/prompt";
-import { localAiConfig } from "../ai";
+import { adapterFor, localAiConfig } from "../ai";
+import { getBudget, monthSpend, recordUsage } from "../usage";
 import { appendChat, loadChat, type LocalChatMessage, type LocalImage, type LocalPart, type LocalStored } from "./history";
 import { browserToolInfos, getBrowserTool, runBrowserTool, type BrowserToolCtx } from "./tools";
 
@@ -28,7 +29,7 @@ export type LocalAgentInput =
   | { kind: "message"; text: string; images?: Array<{ mime: string; data: string }> }
   | { kind: "resume"; toolCallId: string; approved?: boolean; answer?: unknown; note?: string };
 
-export const NO_KEY_MESSAGE = "No Claude key yet — paste one to let Loso think.";
+export const NO_KEY_MESSAGE = "No AI key yet — paste one to let Loso think.";
 
 const MAX_STEPS = 40;
 const REPLY_TIMEOUT_MS = 180_000;
@@ -92,7 +93,7 @@ async function chatWithRetry(cfg: AiConfig, req: ChatRequest, emit: (e: LocalAge
     const timeout = AbortSignal.timeout(REPLY_TIMEOUT_MS);
     const signal = req.signal ? AbortSignal.any([req.signal, timeout]) : timeout;
     try {
-      return await anthropicAdapter.chat(cfg, { ...req, signal });
+      return await adapterFor(cfg.kind).chat(cfg, { ...req, signal });
     } catch (e) {
       if (timeout.aborted && !req.signal?.aborted) throw new Error("Claude didn't answer for 3 minutes. Try again.");
       const c = classifyAgentError(e);
@@ -102,6 +103,20 @@ async function chatWithRetry(cfg: AiConfig, req: ChatRequest, emit: (e: LocalAge
       emit({ type: "text", text: `(Claude is busy — waiting ${wait}s, then carrying on…)` });
       await new Promise((r) => setTimeout(r, wait * 1000));
     }
+  }
+}
+
+/** Only when the user turned on "stop at my monthly limit": refuse to start another model call past it. */
+async function checkBudget() {
+  const b = await getBudget();
+  if (!b.stopAtLimit || b.monthlyUsd === null) return;
+  const spent = await monthSpend();
+  if (spent.cost >= b.monthlyUsd) {
+    const usd = (n: number) => n.toLocaleString(undefined, { style: "currency", currency: "USD" });
+    throw new Error(
+      `Loso stopped because this month's estimate (${usd(spent.cost)}) reached the limit you set (${usd(b.monthlyUsd)}). ` +
+        "You can raise it or turn the stop off in Settings → AI → Usage."
+    );
   }
 }
 
@@ -211,7 +226,9 @@ export async function runLocalAgent(
     const system = buildSystemPrompt({ vision: cfg.vision, mode: "browser" });
     for (let step = 0; step < MAX_STEPS; step++) {
       if (signal.aborted) return;
+      await checkBudget();
       const res = await chatWithRetry(cfg, { system, messages: hydrate(history, cfg.vision), tools, signal }, emit);
+      if (res.usage) await recordUsage({ ...res.usage, provider: cfg.preset, model: cfg.model, at: Date.now(), projectId, turn });
       await save({ role: "assistant", content: res.text ? [{ type: "text", text: res.text }] : [], toolCalls: res.toolCalls.length ? res.toolCalls : undefined });
       if (res.text) emit({ type: "text", text: res.text });
       if (!res.toolCalls.length) break;

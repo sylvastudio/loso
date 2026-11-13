@@ -81,10 +81,21 @@ export interface ChatRequest {
   signal?: AbortSignal;
 }
 
+/** Tokens one call used, normalized across providers. `input` excludes cached tokens. */
+export interface TokenUsage {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  /** Thinking tokens, when reported (already counted in `output`). */
+  reasoning?: number;
+}
+
 export interface ChatResponse {
   text: string;
   toolCalls: ToolCall[];
   stopReason: "end" | "tool_calls" | "length" | "other";
+  usage?: TokenUsage;
 }
 
 export interface ChatAdapter {

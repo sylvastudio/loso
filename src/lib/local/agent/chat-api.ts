@@ -1,24 +1,35 @@
 "use client";
 
 // The chat panel's agent for projects in the user's folder: runs in this tab
-// with the user's own Claude key. Same ChatApi as the dev server's.
+// with the user's own key for the chosen provider. Same ChatApi as the dev server's.
 
-import type { ChatApi, Stored } from "@/components/agent/chat-api";
+import type { ChatApi, ChatUsage, Stored } from "@/components/agent/chat-api";
 import type { ConfigPayload } from "@/components/agent/connect-card";
-import { getPreset } from "@/lib/ai/presets";
-import { getLocalAiSettings, keyRemembered, listClaudeModels, localKey, maskKey, saveLocalAiSettings, switchLocalModel } from "../ai";
+import {
+  getLocalAiSettings,
+  keyRemembered,
+  listProviderModels,
+  localKey,
+  maskKey,
+  rankFor,
+  saveLocalAiSettings,
+  switchLocalModel,
+} from "../ai";
+import { BROWSER_PROVIDERS, DEFAULT_PROVIDER, browserProvider } from "../providers";
+import { allUsage, getBudget, startOfMonth, total } from "../usage";
 import { clearChat, loadChat } from "./history";
 import { runLocalAgent, type LocalAgentEnv } from "./run";
 
 export async function localConfigPayload(): Promise<ConfigPayload> {
-  const [key, settings, remembered] = await Promise.all([localKey(), getLocalAiSettings(), keyRemembered()]);
-  const preset = getPreset("anthropic");
+  const settings = await getLocalAiSettings();
+  const provider = browserProvider(settings?.provider ?? DEFAULT_PROVIDER);
+  const [key, remembered] = await Promise.all([localKey(provider.id), keyRemembered(provider.id)]);
   return {
     config:
       key || settings?.model
         ? {
-            preset: "anthropic",
-            baseUrl: preset?.baseUrl ?? "https://api.anthropic.com",
+            preset: provider.id,
+            baseUrl: provider.baseUrl,
             model: settings?.model ?? "",
             vision: settings?.vision ?? true,
             tools: true,
@@ -29,10 +40,30 @@ export async function localConfigPayload(): Promise<ConfigPayload> {
             lastTest: settings?.lastTest ?? null,
           }
         : null,
-    presets: preset
-      ? [{ id: preset.id, label: preset.label, needsKey: true, keyHint: preset.keyHint, docsUrl: preset.docsUrl, baseUrl: preset.baseUrl, editableBaseUrl: false }]
-      : [],
+    presets: BROWSER_PROVIDERS.map((p) => ({
+      id: p.id,
+      label: p.name,
+      needsKey: true,
+      keyHint: p.keyHint,
+      docsUrl: p.keysUrl,
+      baseUrl: p.baseUrl,
+      editableBaseUrl: false,
+    })),
     sharedKeys: [],
+  };
+}
+
+async function chatUsage(projectId: string): Promise<ChatUsage> {
+  const [all, budget] = await Promise.all([allUsage(), getBudget()]);
+  const mine = all.filter((r) => r.projectId === projectId);
+  const byTurn = new Map<string, typeof mine>();
+  for (const r of mine) byTurn.set(r.turn, [...(byTurn.get(r.turn) ?? []), r]);
+  const month = startOfMonth();
+  return {
+    chat: total(mine),
+    turns: Object.fromEntries([...byTurn].map(([t, rs]) => [t, total(rs)])),
+    monthCost: total(all.filter((r) => r.at >= month)).cost,
+    budget: budget.monthlyUsd,
   };
 }
 
@@ -45,12 +76,14 @@ export function localChatApi(env: LocalAgentEnv): ChatApi {
     async run(body, onEvent, signal) {
       await runLocalAgent(env, body, { emit: onEvent, signal });
     },
-    models: () => listClaudeModels(),
+    models: () => listProviderModels(),
+    rank: rankFor,
+    usage: () => chatUsage(env.projectId),
     async test() {
       const t0 = performance.now();
       const s = await getLocalAiSettings();
       try {
-        const ids = await listClaudeModels();
+        const ids = await listProviderModels();
         const ok = !!s?.model && ids.includes(s.model);
         await saveLocalAiSettings({
           lastTest: { model: s?.model ?? "", ok, tools: true, vision: s?.vision ?? true, latencyMs: Math.round(performance.now() - t0), at: Date.now(), ...(ok ? {} : { error: "404 model not found" }) },

@@ -151,6 +151,7 @@ export const anthropicAdapter: ChatAdapter = {
     const data = raw as {
       content?: Array<{ type: string; text?: string; id?: string; name?: string; input?: unknown }>;
       stop_reason?: string;
+      usage?: { input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number };
     };
     let text = "";
     const toolCalls: ToolCall[] = [];
@@ -181,7 +182,11 @@ export const anthropicAdapter: ChatAdapter = {
             ? "length"
             : "other";
     if (sr === "refusal" && !text) text = "(The model declined this request.)";
-    return { text, toolCalls, stopReason };
+    const u = data.usage;
+    const usage = u
+      ? { input: u.input_tokens ?? 0, output: u.output_tokens ?? 0, cacheRead: u.cache_read_input_tokens ?? 0, cacheWrite: u.cache_creation_input_tokens ?? 0 }
+      : undefined;
+    return { text, toolCalls, stopReason, usage };
   },
 
   async listModels(cfg) {

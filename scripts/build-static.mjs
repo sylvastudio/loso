@@ -76,8 +76,9 @@ const csp = [
   "img-src 'self' blob: data:",
   "media-src 'self' blob:",
   "worker-src 'self' blob:",
-  // Claude (the user's own key), the speech model's files, Remotion's render count, fonts.
-  "connect-src 'self' blob: data: https://api.anthropic.com https://huggingface.co https://cdn-lfs.huggingface.co https://cdn-lfs-us-1.hf.co https://cas-bridge.xethub.hf.co https://www.remotion.pro https://fonts.googleapis.com https://fonts.gstatic.com",
+  // The AI providers the user can bring a key for (lib/local/providers.ts), the
+  // speech model's files, Remotion's render count, fonts.
+  "connect-src 'self' blob: data: https://api.anthropic.com https://api.openai.com https://api.x.ai https://api.groq.com https://generativelanguage.googleapis.com https://openrouter.ai https://huggingface.co https://cdn-lfs.huggingface.co https://cdn-lfs-us-1.hf.co https://cas-bridge.xethub.hf.co https://www.remotion.pro https://fonts.googleapis.com https://fonts.gstatic.com",
   "object-src 'none'",
   "base-uri 'none'",
   "form-action 'none'",

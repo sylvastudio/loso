@@ -1,6 +1,7 @@
 "use client";
 
 import { LocalConnect } from "@/components/agent/local-connect";
+import { UsagePanel } from "@/components/settings/usage-panel";
 import { useEffect, useId, useState } from "react";
 import { ArrowUpRight, Check, ChevronRight, Loader2 } from "lucide-react";
 import { Button, cx } from "@/components/ui";
@@ -57,7 +58,12 @@ function GetAKey({ docsUrl }: { docsUrl?: string }) {
 /** The local (folder) projects and the static site: same shape, honestly not working yet. */
 /** The browser-only app: the user's own Claude key, kept in this browser. */
 export function LocalKeyForm() {
-  return <LocalConnect className="" />;
+  return (
+    <>
+      <LocalConnect className="" />
+      <UsagePanel />
+    </>
+  );
 }
 
 export function AiKeyForm({ payload, onSaved }: { payload: ConfigPayload; onSaved: () => void }) {

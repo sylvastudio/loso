@@ -204,6 +204,7 @@ export const geminiAdapter: ChatAdapter = {
         content?: { parts?: Array<Record<string, unknown>> };
       }>;
       promptFeedback?: { blockReason?: string };
+      usageMetadata?: { promptTokenCount?: number; candidatesTokenCount?: number; cachedContentTokenCount?: number; thoughtsTokenCount?: number };
     };
     const cand = data.candidates?.[0];
     if (!cand) {
@@ -242,7 +243,19 @@ export const geminiAdapter: ChatAdapter = {
           ? "length"
           : "other";
     if (!text && !toolCalls.length && fr && fr !== "STOP") text = `(Gemini stopped: ${fr})`;
-    return { text, toolCalls, stopReason };
+    // promptTokenCount includes cached tokens; thinking is billed as output but counted apart.
+    const u = data.usageMetadata;
+    const cached = u?.cachedContentTokenCount ?? 0;
+    const usage = u
+      ? {
+          input: Math.max(0, (u.promptTokenCount ?? 0) - cached),
+          output: (u.candidatesTokenCount ?? 0) + (u.thoughtsTokenCount ?? 0),
+          cacheRead: cached,
+          cacheWrite: 0,
+          reasoning: u.thoughtsTokenCount,
+        }
+      : undefined;
+    return { text, toolCalls, stopReason, usage };
   },
 
   async listModels(cfg) {

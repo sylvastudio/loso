@@ -22,7 +22,7 @@ function headers(cfg: AiConfig): Record<string, string> {
   const h: Record<string, string> = { "Content-Type": "application/json" };
   if (cfg.apiKey) h.Authorization = `Bearer ${cfg.apiKey}`;
   if (cfg.preset === "openrouter") {
-    h["HTTP-Referer"] = "http://localhost:3000";
+    h["HTTP-Referer"] = typeof window !== "undefined" ? window.location.origin : "http://localhost:3000";
     h["X-Title"] = "Loso";
   }
   return h;
@@ -155,6 +155,12 @@ export const openaiAdapter: ChatAdapter = {
       raw = await send();
     }
     const data = raw as {
+      usage?: {
+        prompt_tokens?: number;
+        completion_tokens?: number;
+        prompt_tokens_details?: { cached_tokens?: number };
+        completion_tokens_details?: { reasoning_tokens?: number };
+      };
       choices?: Array<{
         finish_reason?: string;
         message?: {
@@ -189,7 +195,19 @@ export const openaiAdapter: ChatAdapter = {
           : fr === "tool_calls" || fr === "function_call"
             ? "tool_calls"
             : "other";
-    return { text, toolCalls, stopReason };
+    // prompt_tokens includes cached ones; completion_tokens includes reasoning.
+    const u = data.usage;
+    const cached = u?.prompt_tokens_details?.cached_tokens ?? 0;
+    const usage = u
+      ? {
+          input: Math.max(0, (u.prompt_tokens ?? 0) - cached),
+          output: u.completion_tokens ?? 0,
+          cacheRead: cached,
+          cacheWrite: 0,
+          reasoning: u.completion_tokens_details?.reasoning_tokens,
+        }
+      : undefined;
+    return { text, toolCalls, stopReason, usage };
   },
 
   async listModels(cfg) {

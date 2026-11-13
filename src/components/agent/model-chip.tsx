@@ -79,10 +79,13 @@ export function ModelChip({
   busy,
   onSwitched,
   onManage,
+  usageNote,
 }: {
   model: string;
   vision: boolean;
   busy: boolean;
+  /** e.g. "This chat: 48k tokens in · ~$0.21", shown on hover. */
+  usageNote?: string;
   onSwitched: (name: string) => void;
   /** Change key or provider (the full connect flow). */
   onManage: () => void;
@@ -98,7 +101,7 @@ export function ModelChip({
         aria-haspopup="dialog"
         aria-expanded={open}
         aria-label={`Model: ${name}${vision ? ", sees pictures" : ", can't see pictures"}. Change model`}
-        title={model}
+        title={usageNote ? `${model}\n${usageNote}` : model}
         onClick={() => setOpen((o) => !o)}
         className="flex h-8 min-w-0 max-w-full items-center gap-1.5 border border-edge/60 px-2.5 text-[12.5px] text-ink transition-colors hover:border-lime"
         style={{ borderRadius: 2 }}
@@ -153,7 +156,7 @@ function ModelPopover({
   const api = useChatApi();
   useEffect(() => {
     (api ? api.models() : fetchJson<{ models: string[] }>("/api/ai/models").then((d) => d.models))
-      .then((ids) => setRanked(rankModels(ids).chat))
+      .then((ids) => setRanked(api?.rank ? api.rank(ids) : rankModels(ids).chat))
       .catch((e: Error) => setError(e.message));
   }, [api]);
 

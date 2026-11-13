@@ -9,14 +9,26 @@ export interface RankedModel {
 }
 
 const NOT_CHAT =
-  /whisper|tts|orpheus|playai|speech|audio|transcri|guard|safeguard|moderation|embed|rerank|dall-e|image-gen|imagen|sora|distil|search-preview/i;
+  /whisper|tts|orpheus|playai|speech|audio|transcri|guard|safeguard|moderation|embed|rerank|dall-e|image|imagen|imagine|sora|distil|search-preview|realtime|computer-use|(^|[-/])live([-_]|$)|omni|banana|aqa/i;
 const TOOL_FAMILY =
-  /gpt-oss|qwen3|qwen-?3|qwen2\.5|llama-3\.3|llama-4|kimi-k2|gpt-4\.1|gpt-4o|gpt-5|(^|\/)o\d|claude-(sonnet|opus|haiku|fable)|claude-\d|gemini-.*(pro|flash)|grok-[2-9]|mistral-(large|medium)|devstral|command-r|deepseek-(v3|chat)/i;
+  /gpt-oss|qwen3|qwen-?3|qwen2\.5|llama-3\.3|llama-4|kimi-k2|minimax-m\d|gpt-4\.1|gpt-4o|gpt-[56]|(^|\/)o\d|claude-(sonnet|opus|haiku|fable|mythos)|claude-\d|gemini-\d|grok-[2-9]|mistral-(large|medium)|devstral|command-r|deepseek-(v3|chat)/i;
 const VISION =
-  /vision|(^|[-_/])vl([-_]|$)|llava|llama-4|gemma-?3|pixtral|gpt-4o|gpt-4\.1|gpt-5|claude|gemini|grok-.*(vision|4)/i;
+  /vision|(^|[-_/])vl([-_]|$)|llava|llama-4|gemma-?3|pixtral|gpt-4o|gpt-4\.1|gpt-[56]|claude|gemini|grok-.*(vision|4)/i;
 
 export function isChatModel(id: string): boolean {
   return !NOT_CHAT.test(id);
+}
+
+/** A chat model from a family known to call tools well enough for Loso's agent (names only). */
+export function canCallTools(id: string): boolean {
+  return isChatModel(id) && TOOL_FAMILY.test(id);
+}
+
+/** Small or "lite" models: they can call tools but often get multi-step video edits wrong. */
+export function weakAtEditing(id: string): boolean {
+  const size = sizeB(id);
+  if (size !== null && size <= 30) return true;
+  return /(^|[-_/.])(nano|lite|luna|mini|instant|tiny|small)([-_.]|$)/i.test(id);
 }
 
 function sizeB(id: string): number | null {

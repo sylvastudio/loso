@@ -19,6 +19,8 @@ import {
   useChatApi,
   type AgentBody,
   type ChatApi,
+  type ChatUsage,
+  type UsageSum,
   type LiveEvent,
   type Stored,
   type StoredPart,
@@ -34,6 +36,8 @@ import type { DockStatus } from "@/components/agent/chat-dock";
 import type { RankedModel } from "@/lib/ai/models";
 import { AI_CONFIG_CHANGED } from "@/components/agent/use-connect";
 import { useSettingsSheet } from "@/components/settings/settings-sheet";
+import { USAGE_CHANGED } from "@/lib/local/usage";
+import { costText, fmtTokens, fmtUsd, tokensIn, usageLine } from "@/lib/usage-format";
 
 // ---------- stored message shapes (see chat-api.ts) ----------
 
@@ -461,7 +465,7 @@ function ConfirmCard({
 
 type StepItem = { id: string; name: string; args: Record<string, unknown>; result?: ToolResult; running?: boolean };
 
-function Steps({ steps }: { steps: StepItem[] }) {
+function Steps({ steps, cost }: { steps: StepItem[]; cost?: UsageSum }) {
   const [open, setOpen] = useState(false);
   const done = steps.filter((s) => !s.running);
   const running = steps.find((s) => s.running);
@@ -478,6 +482,11 @@ function Steps({ steps }: { steps: StepItem[] }) {
         >
           <Check size={14} className="shrink-0 text-lime" aria-hidden />
           Did {done.length === 1 ? "1 thing" : `${done.length} things`}
+          {cost && (
+            <span className="text-ink-faint" title={usageLine(cost)}>
+              · {costText(cost)}
+            </span>
+          )}
           <ChevronRight size={13} className={cx("shrink-0 transition-transform", open && "rotate-90")} aria-hidden />
         </button>
       )}
@@ -607,6 +616,7 @@ function ChatPanelInner({
   const [dismissedVision, setDismissedVision] = useState(false);
   const [unread, setUnread] = useState(false);
   const [startedAt, setStartedAt] = useState(0);
+  const [usage, setUsage] = useState<ChatUsage | null>(null);
   const [, tick] = useState(0);
   const abortRef = useRef<AbortController | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -640,6 +650,16 @@ function ChatPanelInner({
     loadConfig();
     loadHistory().catch((e: Error) => setError(e.message));
   }, [loadHistory, loadConfig]);
+
+  // Tokens and estimated cost (the in-browser agent logs them; the dev server doesn't).
+  const loadUsage = useCallback(() => {
+    api.usage?.().then(setUsage, () => {});
+  }, [api]);
+  useEffect(() => {
+    loadUsage();
+    window.addEventListener(USAGE_CHANGED, loadUsage);
+    return () => window.removeEventListener(USAGE_CHANGED, loadUsage);
+  }, [loadUsage]);
 
   // A key or model saved from the settings sheet: pick it up here too.
   useEffect(() => {
@@ -1002,14 +1022,14 @@ function ChatPanelInner({
   type Item =
     | { kind: "user"; key: string; parts: StoredPart[] }
     | { kind: "prose"; key: string; text: string }
-    | { kind: "steps"; key: string; steps: StepItem[] }
+    | { kind: "steps"; key: string; steps: StepItem[]; turn?: string }
     | { kind: "card"; key: string; node: ReactNode }
     | { kind: "receipt"; key: string; text: string };
   const items: Item[] = [];
-  const pushStep = (s: StepItem, key: string) => {
+  const pushStep = (s: StepItem, key: string, turn?: string) => {
     const last = items.at(-1);
-    if (last?.kind === "steps") last.steps.push(s);
-    else items.push({ kind: "steps", key, steps: [s] });
+    if (last?.kind === "steps" && last.turn === turn) last.steps.push(s);
+    else items.push({ kind: "steps", key, steps: [s], turn });
   };
   const receiptsAfter = (seq: number) =>
     receipts.filter((r) => r.afterSeq === seq).forEach((r, i) => items.push({ kind: "receipt", key: `r${seq}-${i}`, text: r.text }));
@@ -1033,7 +1053,7 @@ function ChatPanelInner({
         } else if (CONFIRM_TOOLS.has(c.name) && !r) {
           items.push({ kind: "card", key: c.id, node: <ConfirmCard call={c} disabled={busy} onDecide={(approved) => resume(c.id, { approved })} /> });
         } else {
-          pushStep({ id: c.id, name: c.name, args: c.args, result: r }, `${key}-s`);
+          pushStep({ id: c.id, name: c.name, args: c.args, result: r }, `${key}-s`, s.turn);
         }
       }
     }
@@ -1047,9 +1067,17 @@ function ChatPanelInner({
     }
     if (e.type === "tool_start" && !INTERACTIVE.has(e.name)) {
       const r = results.get(e.id);
-      pushStep({ id: e.id, name: e.name, args: e.args, result: r, running: !r }, `live-s${i}`);
+      pushStep({ id: e.id, name: e.name, args: e.args, result: r, running: !r }, `live-s${i}`, lastTurn ?? undefined);
     }
   });
+
+  // Each turn's cost shows once, on its last "Did N things" row, after it finishes.
+  const costAt = new Map<string, string>();
+  for (const it of items) {
+    if (it.kind === "steps" && it.turn && usage?.turns[it.turn] && !(busy && it.turn === lastTurn)) costAt.set(it.turn, it.key);
+  }
+  const chatUsage = usage && usage.chat.input + usage.chat.output + usage.chat.cacheRead > 0 ? usage.chat : null;
+  const overBudget = usage && usage.budget !== null && usage.monthCost >= usage.budget ? usage : null;
 
   const pictureNeedsSwitch = attachments.length > 0 && !vision;
 
@@ -1057,6 +1085,7 @@ function ChatPanelInner({
     <>
       {header(
         <ModelChip
+          usageNote={chatUsage ? `This chat: ${usageLine(chatUsage)} (estimate)` : undefined}
           model={model.model}
           vision={model.vision}
           busy={busy}
@@ -1153,7 +1182,7 @@ function ChatPanelInner({
             );
           }
           if (it.kind === "prose") return <Prose key={it.key} text={it.text} />;
-          if (it.kind === "steps") return <Steps key={it.key} steps={it.steps} />;
+          if (it.kind === "steps") return <Steps key={it.key} steps={it.steps} cost={it.key === costAt.get(it.turn ?? "") ? usage?.turns[it.turn ?? ""] : undefined} />;
           if (it.kind === "receipt")
             return (
               <p key={it.key} className="flex items-center gap-2 text-[13px] text-ink-dim">
@@ -1195,6 +1224,19 @@ function ChatPanelInner({
                 </button>
               ))}
           </div>
+        )}
+
+        {!busy && chatUsage && (
+          <p className="text-[12px] text-ink-faint">
+            This chat: {fmtTokens(tokensIn(chatUsage))} tokens in · {fmtTokens(chatUsage.output)} out · {costText(chatUsage)}
+            <span className="sr-only"> (an estimate; your AI provider&rsquo;s billing page has the real amount)</span>
+          </p>
+        )}
+        {!busy && overBudget && (
+          <p role="status" className="border-l-2 border-line-strong pl-3 text-[13px] leading-snug text-ink-dim">
+            This month&rsquo;s estimate ({fmtUsd(overBudget.monthCost)}) has passed the limit you set ({fmtUsd(overBudget.budget!)}). You
+            can see what was used, or change the limit, in Settings → AI.
+          </p>
         )}
       </div>
 
