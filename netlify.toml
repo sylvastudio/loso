@@ -35,6 +35,14 @@
   [headers.values]
     Cache-Control = "public, max-age=604800"
 
+# Next's client router fetches each page's data as <page>.txt and only
+# accepts it as text/x-component; served as text/plain it gives up and opens
+# the raw .txt instead of the page.
+[[headers]]
+  for = "/*.txt"
+  [headers.values]
+    Content-Type = "text/x-component"
+
 # The editor is one page that reads ?id= in the browser.
 [[redirects]]
   from = "/edit/*"
